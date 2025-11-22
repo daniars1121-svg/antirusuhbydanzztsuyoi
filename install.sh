@@ -19,7 +19,7 @@ menu() {
     echo "3. Hapus Owner"
     echo "4. Ubah Owner"
     echo "5. Lihat Daftar Owner"
-    echo "6. Hapus Anti Rusuh"
+    echo "6. Remove Anti Rusuh"
     echo "7. Exit"
     echo
     read -p "Masukkan pilihan: " menu_choice
@@ -151,11 +151,20 @@ cat > "$PANEL/resources/views/errors/protect.blade.php" << 'EOF'
 EOF
 
 cat > "/tmp/patch-route.sh" << 'EOF'
+#!/bin/bash
 FILE="/var/www/pterodactyl/routes/admin.php"
-if ! grep -q "owner.menu" "$FILE"; then
-    sed -i '1s/^/Route::middleware(["auth","owner.menu"])->group(function() { \n/' "$FILE"
-    echo "});" >> "$FILE"
+
+if [ ! -f "$FILE" ]; then
+    exit 0
 fi
+
+# Kalau sudah ada patch, skip
+if grep -q "owner.menu" "$FILE"; then
+    exit 0
+fi
+
+# Edit middleware pada admin route
+sed -i 's/Route::middleware(\["auth"\])/Route::middleware(["auth","owner.menu"])/' "$FILE"
 EOF
 
 bash /tmp/patch-route.sh
@@ -257,8 +266,7 @@ remove_antirusuh() {
 
     sed -i '/owner.menu/d' "$PANEL/app/Http/Kernel.php"
 
-    sed -i '1{/Route::middleware\(\["auth","owner.menu"\]\)->group(function() {/d}' "$PANEL/routes/admin.php"
-    sed -i '/});/d' "$PANEL/routes/admin.php"
+    sed -i 's/Route::middleware(\["auth","owner.menu"\])/Route::middleware(["auth"])/' "$PANEL/routes/admin.php"
 
     sed -i '/OWNERS=/d' "$ENV_FILE"
 
