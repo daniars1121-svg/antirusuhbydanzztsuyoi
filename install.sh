@@ -12,7 +12,7 @@ watermark() {
 menu() {
     clear
     echo "==========================="
-    echo "   Anti Rusuh Installer FIX"
+    echo "   Anti Rusuh Installer "
     watermark
     echo "==========================="
     echo
