@@ -163,23 +163,24 @@ EOF
 # ========================
 #     PATCH KERNEL.PHP
 # ========================
-
 echo "🔧 Mem-patch Kernel.php..."
 
 if ! grep -q "owner.menu" "$KERNEL_FILE"; then
-    sed -i '/protected \$routeMiddleware = \[/a\        '\''owner.menu'\'' => \Pterodactyl\\Http\\Middleware\\AntiRusuh::class,' "$KERNEL_FILE"
+    sed -i '/protected \$routeMiddleware = \[/a\        '\''owner.menu'\'' => \\Pterodactyl\\Http\\Middleware\\AntiRusuh::class,' "$KERNEL_FILE"
 fi
 
 # ========================
 #   PATCH ROUTE ADMIN
 # ========================
-
 echo "🔧 Mem-patch admin.php..."
 
 if [ -f "$ROUTE_ADMIN" ]; then
     sed -i 's/Route::middleware(\["auth"\])/Route::middleware(["auth","owner.menu"])/' "$ROUTE_ADMIN"
 fi
 
+# ========================
+#   REBUILD CACHE
+# ========================
 cd "$PANEL"
 
 php artisan config:clear
