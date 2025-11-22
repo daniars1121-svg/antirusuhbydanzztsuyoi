@@ -5,49 +5,23 @@ ENV_FILE="$PANEL/.env"
 KERNEL_FILE="$PANEL/app/Http/Kernel.php"
 ROUTE_ADMIN="$PANEL/routes/admin.php"
 
-watermark() {
-    echo "         DANZZ TSUYOI"
-}
+echo ""
+echo "=============================="
+echo "   Anti Rusuh Installer FIX"
+echo "=============================="
+echo ""
 
-menu() {
-    clear
-    echo "==========================="
-    echo "   Anti Rusuh Installer FIX"
-    watermark
-    echo "==========================="
-    echo
-    echo "1. Install Anti Rusuh"
-    echo "2. Tambahkan Owner"
-    echo "3. Hapus Owner"
-    echo "4. Ubah Owner"
-    echo "5. Lihat Daftar Owner"
-    echo "6. Remove Anti Rusuh"
-    echo "7. Exit"
-    echo
-    read -p "Masukkan pilihan: " menu_choice
+read -p "Masukkan email owner utama: " email
 
-    case $menu_choice in
-        1) install_antirusuh ;;
-        2) tambah_owner ;;
-        3) hapus_owner ;;
-        4) ubah_owner ;;
-        5) list_owner ;;
-        6) remove_antirusuh ;;
-        7) exit 0 ;;
-        *) menu ;;
-    esac
-}
+# Tambah / Replace OWNER
+if grep -q "^OWNERS=" "$ENV_FILE"; then
+    sed -i "s/^OWNERS=.*/OWNERS=$email/" "$ENV_FILE"
+else
+    echo "OWNERS=$email" >> "$ENV_FILE"
+fi
 
-install_antirusuh() {
-    read -p "Masukkan email owner utama: " email
-
-    if grep -q "^OWNERS=" "$ENV_FILE"; then
-        sed -i "s/^OWNERS=.*/OWNERS=$email/" "$ENV_FILE"
-    else
-        echo "OWNERS=$email" >> "$ENV_FILE"
-    fi
-
-    mkdir -p "$PANEL/app/Http/Middleware"
+# Buat Middleware
+mkdir -p "$PANEL/app/Http/Middleware"
 
 cat > "$PANEL/app/Http/Middleware/AntiRusuh.php" << 'EOF'
 <?php
@@ -98,7 +72,7 @@ class AntiRusuh
             }
         }
 
-        if (preg_match("/server[s]?\/(\d+)/", $path, $m)) {
+        if (preg_match("/server[s]?\/(\\d+)/", $path, $m)) {
             $server = Server::find($m[1]);
             if ($server && $server->owner_id !== $user->id) {
                 return response()->view("errors.protect", [
@@ -108,14 +82,14 @@ class AntiRusuh
             }
         }
 
-        if (preg_match("/admin\/users\/(\d+)/", $path) && $method === "DELETE") {
+        if (preg_match("/admin\\/users\\/(\\d+)/", $path) && $method === "DELETE") {
             return response()->view("errors.protect", [
                 "title" => "Akses Ditolak",
                 "message" => "APALAH NO DEL DEL YACH."
             ], 403);
         }
 
-        if (preg_match("/admin\/servers\/(\d+)/", $path) && $method === "DELETE") {
+        if (preg_match("/admin\\/servers\\/(\\d+)/", $path) && $method === "DELETE") {
             return response()->view("errors.protect", [
                 "title" => "Akses Ditolak",
                 "message" => "APALAH NO DEL DEL YACH."
@@ -127,7 +101,8 @@ class AntiRusuh
 }
 EOF
 
-    mkdir -p "$PANEL/resources/views/errors"
+# Buat blade protect
+mkdir -p "$PANEL/resources/views/errors"
 
 cat > "$PANEL/resources/views/errors/protect.blade.php" << 'EOF'
 <!DOCTYPE html>
@@ -152,124 +127,30 @@ cat > "$PANEL/resources/views/errors/protect.blade.php" << 'EOF'
 </html>
 EOF
 
-echo "🔧 Mem-patch Kernel.php..."
+echo ""
+echo "🔧 Patch Kernel.php..."
+
+# Tambahkan middlewareAliases
 if ! grep -q "owner.menu" "$KERNEL_FILE"; then
-    sed -i '/protected \$routeMiddleware = \[/a\        '\''owner.menu'\'' => \Pterodactyl\\Http\\Middleware\\AntiRusuh::class,' "$KERNEL_FILE"
+    sed -i "/protected \\$middlewareAliases = \\[/a\\        'owner.menu' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\AntiRusuh::class," "$KERNEL_FILE"
 fi
 
-echo "🔧 Mem-patch admin.php..."
-if [ -f "$ROUTE_ADMIN" ]; then
-    sed -i 's/Route::middleware(\["auth"\])/Route::middleware(["auth","owner.menu"])/' "$ROUTE_ADMIN"
-fi
+echo ""
+echo "🔧 Patch admin.php..."
 
+# Patch admin.php
+sed -i "s/Route::middleware(\['auth'\])/Route::middleware(['auth','owner.menu'])/" "$ROUTE_ADMIN"
+sed -i "s/Route::middleware(\[\"auth\"\])/Route::middleware([\"auth\",\"owner.menu\"])/" "$ROUTE_ADMIN"
+
+# Bersihkan cache Laravel
 cd "$PANEL"
 php artisan config:clear
-php artisan config:cache
+php artisan cache:clear
 php artisan route:clear
+php artisan view:clear
+php artisan config:cache
 php artisan route:cache
 
-echo "✔️ Anti Rusuh berhasil dipasang!"
-sleep 1
-menu
-}
-
-list_owner() {
-    clear
-    echo "Daftar Owner:"
-    IFS=',' read -ra owners <<< "$(grep '^OWNERS=' "$ENV_FILE" | cut -d '=' -f2)"
-    idx=1
-    for mail in "${owners[@]}"; do
-        echo "$idx. $mail"
-        idx=$((idx+1))
-    done
-    echo
-    read -p "Enter untuk kembali..." x
-    menu
-}
-
-tambah_owner() {
-    read -p "Masukkan email owner baru: " email
-    old=$(grep '^OWNERS=' "$ENV_FILE" | cut -d '=' -f2)
-    sed -i "s/^OWNERS=.*/OWNERS=$old,$email/" "$ENV_FILE"
-    echo "Owner ditambahkan"
-    sleep 1
-    menu
-}
-
-hapus_owner() {
-    IFS=',' read -ra owners <<< "$(grep '^OWNERS=' "$ENV_FILE" | cut -d '=' -f2)"
-
-    echo "Pilih owner yang dihapus:"
-    idx=1
-    for o in "${owners[@]}"; do
-        echo "$idx. $o"
-        idx=$((idx+1))
-    done
-    read -p "Nomor: " pick
-
-    removed="${owners[$pick-1]}"
-    new_list=""
-
-    for o in "${owners[@]}"; do
-        if [ "$o" != "$removed" ]; then
-            if [ -z "$new_list" ]; then new_list="$o"
-            else new_list="$new_list,$o"
-            fi
-        fi
-    done
-
-    sed -i "s/^OWNERS=.*/OWNERS=$new_list/" "$ENV_FILE"
-
-    echo "Owner dihapus"
-    sleep 1
-    menu
-}
-
-ubah_owner() {
-    IFS=',' read -ra owners <<< "$(grep '^OWNERS=' "$ENV_FILE" | cut -d '=' -f2)"
-
-    echo "Pilih owner yang mau diubah:"
-    idx=1
-    for o in "${owners[@]}"; do
-        echo "$idx. $o"
-        idx=$((idx+1))
-    done
-    read -p "Nomor: " pick
-    read -p "Email baru: " new_email
-
-    owners[$pick-1]=$new_email
-    new_list=""
-    for o in "${owners[@]}"; do
-        if [ -z "$new_list" ]; then new_list="$o"
-        else new_list="$new_list,$o"
-        fi
-    done
-
-    sed -i "s/^OWNERS=.*/OWNERS=$new_list/" "$ENV_FILE"
-    echo "Owner diubah"
-    sleep 1
-    menu
-}
-
-remove_antirusuh() {
-    echo "Menghapus Anti Rusuh..."
-
-    rm -f "$PANEL/app/Http/Middleware/AntiRusuh.php"
-    rm -f "$PANEL/resources/views/errors/protect.blade.php"
-
-    sed -i '/owner.menu/d' "$KERNEL_FILE"
-    sed -i 's/Route::middleware(\["auth","owner.menu"\])/Route::middleware(["auth"])/' "$ROUTE_ADMIN"
-    sed -i '/OWNERS=/d' "$ENV_FILE"
-
-    cd "$PANEL"
-    php artisan config:clear
-    php artisan config:cache
-    php artisan route:clear
-    php artisan route:cache
-
-    echo "✔️ Anti Rusuh berhasil dihapus!"
-    sleep 1
-    menu
-}
-
-menu
+echo ""
+echo "✔️ Anti Rusuh berhasil dipasang wok"
+echo ""
