@@ -4,9 +4,9 @@ clear
 
 PANEL_PATH="/var/www/pterodactyl"
 CONFIG_FILE="$PANEL_PATH/config/antirusuh.php"
-BLADE_FILE="$PANEL_PATH/resources/views/layouts/app.blade.php"
+BLADE_FILE="$PANEL_PATH/resources/views/app.blade.php"
 
-if [ "$EUID" -ne 0 ]; then echo "Harus sebagai root"; exit 1; fi
+if [ "$EUID" -ne 0 ]; then echo "Harus root"; exit 1; fi
 if [ ! -d "$PANEL_PATH" ]; then echo "Panel tidak ditemukan"; exit 1; fi
 
 menu() {
@@ -16,14 +16,15 @@ echo "2) Hapus AntiRusuh"
 echo "3) Tambah Owner"
 echo "4) Update AntiRusuh"
 echo "0) Keluar"
-read -p "Pilih menu: " opt
-case $opt in
-    1) install ;;
-    2) uninstall ;;
-    3) addowner ;;
-    4) update ;;
-    0) exit ;;
-    *) menu ;;
+read -p "Pilih menu: " m
+
+case $m in
+1) install ;;
+2) uninstall ;;
+3) addowner ;;
+4) update ;;
+0) exit ;;
+*) menu ;;
 esac
 }
 
@@ -36,7 +37,6 @@ mkdir -p $PANEL_PATH/app/Http/Middleware
 mkdir -p $PANEL_PATH/app/Console/Commands
 mkdir -p $PANEL_PATH/resources/js
 
-# CONFIG
 cat > $PANEL_PATH/config/antirusuh.php <<EOF
 <?php
 
@@ -48,7 +48,6 @@ return [
 ];
 EOF
 
-# MIDDLEWARE
 cat > $PANEL_PATH/app/Http/Middleware/AntiRusuh.php <<'EOF'
 <?php
 
@@ -70,27 +69,28 @@ class AntiRusuh
         $uri = $request->path();
 
         $block = [
-            'admin/nodes',
-            'admin/locations',
-            'admin/servers/*/build',
-            'admin/servers/*/network',
-            'nodes/*/settings',
-            'nodes/*/allocations'
+            "admin/nodes",
+            "admin/locations",
+            "admin/servers/*/build",
+            "admin/servers/*/network",
+            "nodes/*/settings",
+            "nodes/*/allocations"
         ];
 
         foreach ($block as $p) {
-            $regex = '#^' . str_replace('\*','.*',preg_quote($p,'#')) . '$#';
+            $regex = "#^" . str_replace('\*','.*',preg_quote($p,'#')) . "\$#";
             if (preg_match($regex,$uri)) {
-                if (!$isOwner) return redirect('/')->with('error','Aksi diblokir AntiRusuh.');
+                if (!$isOwner) return redirect("/")->with("error","Aksi diblokir AntiRusuh.");
             }
         }
 
         if (preg_match('#^server/([a-zA-Z0-9-]+)#',$uri,$m)) {
-            $uuid=$m[1];
-            $server=\App\Models\Server::where('uuid',$uuid)
+            $uuid = $m[1];
+            $server = \App\Models\Server::where('uuid',$uuid)
                      ->orWhere('uuidShort',$uuid)->first();
+
             if ($server && $server->owner_id !== $user->id && !$isOwner)
-                return redirect('/')->with('error','Tidak boleh akses server orang.');
+                return redirect("/")->with("error","Tidak boleh akses server orang.");
         }
 
         return $next($request);
@@ -98,7 +98,6 @@ class AntiRusuh
 }
 EOF
 
-# CLEAN COMMAND
 cat > $PANEL_PATH/app/Console/Commands/AntiRusuhClean.php <<'EOF'
 <?php
 
@@ -111,24 +110,24 @@ use App\Models\Server;
 class AntiRusuhClean extends Command
 {
     protected $signature = 'antirusuh:clean {--force}';
-    protected $description = 'Hapus semua user/server non-owner';
+    protected $description = 'Hapus user/server non-owner';
 
     public function handle()
     {
         if (config('antirusuh.safe_mode')) {
-            $this->error("SAFE MODE aktif.");
+            $this->error("SAFE MODE aktif");
             return;
         }
 
         $owners = config('antirusuh.owners');
+
         $users = User::whereNotIn('username',$owners)
-                     ->whereNotIn('email',$owners)
-                     ->get();
+                     ->whereNotIn('email',$owners)->get();
 
         $this->info("User non-owner: ".$users->count());
 
-        if (!$this->option('force')) {
-            $this->warn("Gunakan --force untuk melanjutkan.");
+        if (!$this->option("force")) {
+            $this->warn("Gunakan --force");
             return;
         }
 
@@ -137,43 +136,39 @@ class AntiRusuhClean extends Command
             $u->delete();
         }
 
-        $this->info("Selesai.");
+        $this->info("Selesai");
     }
 }
 EOF
 
-# JS FILE
 cat > $PANEL_PATH/resources/js/antirusuh.js <<'EOF'
 document.addEventListener("DOMContentLoaded",()=>{
 
-    const owner=document
-        .querySelector('meta[name="antirusuh-owner"]')
-        ?.content==="1";
-
+    const owner=document.querySelector('meta[name="antirusuh-owner"]')?.content==="1";
     if(owner) return;
 
-    const block=[
+    const blok=[
         ".btn-location",".btn-network",".btn-build",
         ".btn-allocations",".danger-zone",".btn-admin"
     ];
 
-    block.forEach(sel=>{
-        document.querySelectorAll(sel).forEach(btn=>{
-            btn.style.opacity="0.5";
-            btn.style.pointerEvents="none";
-            btn.onclick=()=>alert("Aksi diblokir AntiRusuh!");
+    blok.forEach(s=>{
+        document.querySelectorAll(s).forEach(b=>{
+            b.style.opacity="0.5";
+            b.style.pointerEvents="none";
+            b.onclick=()=>alert("Aksi diblokir AntiRusuh!");
         });
     });
+
 });
 EOF
 
-# REGISTER MIDDLEWARE
 if ! grep -q "antirusuh" $PANEL_PATH/app/Http/Kernel.php; then
     sed -i "/protected \$routeMiddleware = \[/a\\        'antirusuh' => \App\Http\Middleware\AntiRusuh::class," $PANEL_PATH/app/Http/Kernel.php
 fi
 
-# BLADE META INJECT
 META='<meta name="antirusuh-owner" content="{{ in_array(auth()->user()->username ?? auth()->user()->email, config('\''antirusuh.owners'\'')) ? '\''1'\'' : '\''0'\'' }}">'
+
 if ! grep -q "antirusuh-owner" "$BLADE_FILE"; then
     sed -i "/<\/head>/i $META" "$BLADE_FILE"
 fi
@@ -216,18 +211,24 @@ menu
 addowner() {
 
 if [ ! -f "$CONFIG_FILE" ]; then echo "Belum terinstall"; sleep 2; menu; fi
-read -p "Owner baru: " NEW
-sed -i "/'owners' => \[/a\        '$NEW'," $CONFIG_FILE
+
+read -p "Owner baru: " nw
+sed -i "/'owners' => \[/a\        '$nw'," $CONFIG_FILE
+
 echo "Owner ditambahkan"
 sleep 2
 menu
 }
 
 update() {
-cd /root/antirusuh 2>/dev/null || git clone https://github.com/daniars1121-svg/antirusuhbydanzztsuyoi /root/antirusuh
+
+cd /root/antirusuh 2>/dev/null \
+|| git clone https://github.com/daniars1121-svg/antirusuhbydanzztsuyoi /root/antirusuh
+
 cd /root/antirusuh
 git pull
 bash antirusuh.sh
+
 }
 
 menu
