@@ -182,7 +182,7 @@ php artisan config:cache
 systemctl restart php8.1-fpm 2>/dev/null || true
 systemctl restart php8.2-fpm 2>/dev/null || true
 
-echo "AntiRusuh terinstall"
+echo "AntiRusuh terinstall cuyy"
 sleep 2
 menu
 }
