@@ -2,6 +2,8 @@
 
 PANEL="/var/www/pterodactyl"
 ENV_FILE="$PANEL/.env"
+KERNEL_FILE="$PANEL/app/Http/Kernel.php"
+ROUTE_ADMIN="$PANEL/routes/admin.php"
 
 watermark() {
     echo "         DANZZ TSUYOI"
@@ -10,7 +12,7 @@ watermark() {
 menu() {
     clear
     echo "==========================="
-    echo "   Anti Rusuh Installer"
+    echo "   Anti Rusuh Installer FIX"
     watermark
     echo "==========================="
     echo
@@ -39,6 +41,7 @@ menu() {
 install_antirusuh() {
     read -p "Masukkan email owner utama: " email
 
+    # Set Owners di .env
     if grep -q "^OWNERS=" "$ENV_FILE"; then
         sed -i "s/^OWNERS=.*/OWNERS=$email/" "$ENV_FILE"
     else
@@ -47,6 +50,9 @@ install_antirusuh() {
 
     mkdir -p "$PANEL/app/Http/Middleware"
 
+# ========================
+#       MIDDLEWARE
+# ========================
 cat > "$PANEL/app/Http/Middleware/AntiRusuh.php" << 'EOF'
 <?php
 
@@ -125,7 +131,11 @@ class AntiRusuh
 }
 EOF
 
-    mkdir -p "$PANEL/resources/views/errors"
+# ========================
+#      VIEW PROTECT
+# ========================
+
+mkdir -p "$PANEL/resources/views/errors"
 
 cat > "$PANEL/resources/views/errors/protect.blade.php" << 'EOF'
 <!DOCTYPE html>
@@ -150,35 +160,41 @@ cat > "$PANEL/resources/views/errors/protect.blade.php" << 'EOF'
 </html>
 EOF
 
-cat > "/tmp/patch-route.sh" << 'EOF'
-#!/bin/bash
-FILE="/var/www/pterodactyl/routes/admin.php"
+# ========================
+#     PATCH KERNEL.PHP
+# ========================
 
-if [ ! -f "$FILE" ]; then
-    exit 0
+echo "🔧 Mem-patch Kernel.php..."
+
+if ! grep -q "owner.menu" "$KERNEL_FILE"; then
+    sed -i '/protected \$routeMiddleware = \[/a\        '\''owner.menu'\'' => \Pterodactyl\\Http\\Middleware\\AntiRusuh::class,' "$KERNEL_FILE"
 fi
 
-# Kalau sudah ada patch, skip
-if grep -q "owner.menu" "$FILE"; then
-    exit 0
+# ========================
+#   PATCH ROUTE ADMIN
+# ========================
+
+echo "🔧 Mem-patch admin.php..."
+
+if [ -f "$ROUTE_ADMIN" ]; then
+    sed -i 's/Route::middleware(\["auth"\])/Route::middleware(["auth","owner.menu"])/' "$ROUTE_ADMIN"
 fi
 
-# Edit middleware pada admin route
-sed -i 's/Route::middleware(\["auth"\])/Route::middleware(["auth","owner.menu"])/' "$FILE"
-EOF
+cd "$PANEL"
 
-bash /tmp/patch-route.sh
+php artisan config:clear
+php artisan config:cache
+php artisan route:clear
+php artisan route:cache
 
-    cd "$PANEL"
-    php artisan config:cache
-    php artisan route:cache
-
-    echo
-    echo "✔️ Anti Rusuh berhasil dipasang!"
-    echo "By DANZZ TSUYOI"
-    sleep 2
-    menu
+echo "✔️ Anti Rusuh berhasil dipasang!"
+sleep 1
+menu
 }
+
+# =========================================
+#   FUNCTIONS MENU LAIN
+# =========================================
 
 list_owner() {
     clear
@@ -259,24 +275,23 @@ ubah_owner() {
 }
 
 remove_antirusuh() {
-    echo "Menghapus Anti Rusuh PRO..."
+    echo "Menghapus Anti Rusuh..."
 
     rm -f "$PANEL/app/Http/Middleware/AntiRusuh.php"
     rm -f "$PANEL/resources/views/errors/protect.blade.php"
 
-    sed -i '/owner.menu/d' "$PANEL/app/Http/Kernel.php"
-
-    sed -i 's/Route::middleware(\["auth","owner.menu"\])/Route::middleware(["auth"])/' "$PANEL/routes/admin.php"
-
+    sed -i '/owner.menu/d' "$KERNEL_FILE"
+    sed -i 's/Route::middleware(\["auth","owner.menu"\])/Route::middleware(["auth"])/' "$ROUTE_ADMIN"
     sed -i '/OWNERS=/d' "$ENV_FILE"
 
     cd "$PANEL"
+    php artisan config:clear
     php artisan config:cache
+    php artisan route:clear
     php artisan route:cache
 
     echo "✔️ Anti Rusuh berhasil dihapus!"
-    echo "By DANZZ TSUYOI"
-    sleep 2
+    sleep 1
     menu
 }
 
