@@ -4,86 +4,117 @@ PTERO="/var/www/pterodactyl"
 ROUTES="$PTERO/routes/admin.php"
 MIDDLEWARE="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
 KERNEL="$PTERO/app/Http/Kernel.php"
+USERCTL="$PTERO/app/Http/Controllers/Admin/UserController.php"
+SERVERDIR="$PTERO/app/Http/Controllers/Admin/Servers"
 
-menu(){
-echo "1. Install AntiRusuh"
-echo "2. Tambahkan Owner"
-echo "3. Uninstall AntiRusuh"
-echo "4. Exit"
-read -p "Pilih: " p
-}
+install_antirusuh() {
+    echo "Masukkan ID Owner:"
+    read OWNER_ID
 
-add_mw(){
-local p="$1"
-if ! grep -q "prefix' => '$p', 'middleware' => \['whitelistadmin'\]" "$ROUTES"; then
-sed -i "s|\['prefix' => '$p'\]|\['prefix' => '$p', 'middleware' => ['whitelistadmin']\]|g" "$ROUTES"
-fi
-}
-
-del_mw(){
-local p="$1"
-sed -i "s|\['prefix' => '$p', 'middleware' => \['whitelistadmin'\]\]|\['prefix' => '$p'\]|g" "$ROUTES"
-}
-
-menu
-
-if [[ $p == 1 ]]; then
-read -p "ID Owner: " O
-
-mkdir -p "$PTERO/app/Http/Middleware"
-
-cat > $MIDDLEWARE <<EOF
+    cat > $MIDDLEWARE << EOF
 <?php
+
 namespace App\Http\Middleware;
+
 use Closure;
 use Illuminate\Http\Request;
-class WhitelistAdmin{
-public function handle(Request \$r, Closure \$n){
-\$allow=[$O];
-if(!in_array(\$r->user()->id,\$allow)){abort(403,'ngapain wok');}
-return \$n(\$r);
-}}
+
+class WhitelistAdmin
+{
+    public function handle(Request \$request, Closure \$next)
+    {
+        \$allowedAdmins = [$OWNER_ID];
+
+        if (!in_array(\$request->user()->id, \$allowedAdmins)) {
+            abort(403, 'ngapain wok');
+        }
+
+        return \$next(\$request);
+    }
+}
 EOF
 
-if ! grep -q "whitelistadmin" "$KERNEL"; then
-sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," "$KERNEL"
-fi
+    if ! grep -q "whitelistadmin" "$KERNEL"; then
+        sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," $KERNEL
+    fi
 
-add_mw "nodes"
-add_mw "locations"
-add_mw "databases"
-add_mw "mounts"
-add_mw "nests"
+    lock_route() {
+        sed -i "s/\['prefix' => '$1'\]/['prefix' => '$1', 'middleware' => ['whitelistadmin']]/g" $ROUTES
+    }
 
-cd $PTERO
-php artisan route:clear
-php artisan config:clear
-php artisan view:clear
-php artisan cache:clear
-systemctl restart pteroq
-fi
+    lock_route "nodes"
+    lock_route "locations"
+    lock_route "databases"
+    lock_route "mounts"
+    lock_route "nests"
 
-if [[ $p == 2 ]]; then
-read -p "ID Owner Baru: " O2
-sed -i "s/\[\(.*\)\]/[\1,$O2]/" "$MIDDLEWARE"
-cd $PTERO
-php artisan route:clear
-fi
+    sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $USERCTL
 
-if [[ $p == 3 ]]; then
-rm -f "$MIDDLEWARE"
-sed -i "/whitelistadmin/d" "$KERNEL"
+    for file in $SERVERDIR/*.php; do
+        sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function destroy/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function view/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function details/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+    done
 
-del_mw "nodes"
-del_mw "locations"
-del_mw "databases"
-del_mw "mounts"
-del_mw "nests"
+    cd $PTERO
+    php artisan route:clear
+    php artisan config:clear
+    php artisan view:clear
+    php artisan cache:clear
+    systemctl restart pteroq
+}
 
-cd $PTERO
-php artisan route:clear
-php artisan config:clear
-php artisan view:clear
-php artisan cache:clear
-systemctl restart pteroq
-fi
+add_owner() {
+    echo "Masukkan ID Owner Baru:"
+    read NEW_OWNER
+    sed -i "s/\$allowedAdmins = \[\(.*\)\];/\$allowedAdmins = [\1, $NEW_OWNER];/" $MIDDLEWARE
+    cd $PTERO
+    php artisan route:clear
+}
+
+uninstall_antirusuh() {
+    rm -f $MIDDLEWARE
+    sed -i "/'whitelistadmin' =>/d" $KERNEL
+
+    unlock_route() {
+        sed -i "s/\['prefix' => '$1', 'middleware' => \['whitelistadmin'\]\]/['prefix' => '$1']/g" $ROUTES
+    }
+
+    unlock_route "nodes"
+    unlock_route "locations"
+    unlock_route "databases"
+    unlock_route "mounts"
+    unlock_route "nests"
+
+    sed -i "/ngapain wok/d" $USERCTL
+    for file in $SERVERDIR/*.php; do
+        sed -i "/ngapain wok/d" $file
+    done
+
+    cd $PTERO
+    php artisan route:clear
+    php artisan config:clear
+    php artisan view:clear
+    php artisan cache:clear
+    systemctl restart pteroq
+}
+
+while true
+do
+    clear
+    echo "1. Install AntiRusuh"
+    echo "2. Tambahkan Owner"
+    echo "3. Uninstall AntiRusuh"
+    echo "4. Exit"
+    read choice
+
+    case $choice in
+        1) install_antirusuh ;;
+        2) add_owner ;;
+        3) uninstall_antirusuh ;;
+        4) exit ;;
+    esac
+
+    read
+done
