@@ -1,8 +1,10 @@
 #!/bin/bash
 
 PTERO="/var/www/pterodactyl"
-ROUTES="$PTERO/routes/admin.php"
-MIDDLEWARE="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
+ROUTES_ADMIN="$PTERO/routes/admin.php"
+ROUTES_CLIENT="$PTERO/routes/client.php"
+MIDDLEWARE_ADMIN="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
+MIDDLEWARE_CLIENT="$PTERO/app/Http/Middleware/ClientServerWhitelist.php"
 KERNEL="$PTERO/app/Http/Kernel.php"
 USERCTL="$PTERO/app/Http/Controllers/Admin/UserController.php"
 SERVERDIR="$PTERO/app/Http/Controllers/Admin/Servers"
@@ -11,8 +13,10 @@ install_antirusuh() {
     echo "Masukkan ID Owner:"
     read OWNER_ID
 
-    # Buat middleware dengan namespace PTERODACTYL (fix utama)
-    cat > $MIDDLEWARE << EOF
+    # =======================
+    # 1. Middleware ADMIN
+    # =======================
+    cat > $MIDDLEWARE_ADMIN << EOF
 <?php
 
 namespace Pterodactyl\Http\Middleware;
@@ -35,13 +39,60 @@ class WhitelistAdmin
 }
 EOF
 
-    # Tambah alias ke kernel (namespace sudah benar)
+    # =======================
+    # 2. Middleware CLIENT LOCK
+    # =======================
+    cat > $MIDDLEWARE_CLIENT << EOF
+<?php
+
+namespace Pterodactyl\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+
+class ClientServerWhitelist
+{
+    public function handle(Request \$request, Closure \$next)
+    {
+        \$allowedAdmins = [$OWNER_ID];
+        \$user = \$request->user();
+
+        // Owner bebas akses semuanya
+        if (in_array(\$user->id, \$allowedAdmins)) {
+            return \$next(\$request);
+        }
+
+        // Cek kalau route mengandung server
+        if (\$request->route()->parameter('server')) {
+            \$server = \$request->route()->parameter('server');
+
+            // Kalau bukan pemilik server → blok
+            if (\$server->owner_id !== \$user->id) {
+                abort(403, 'ngapain wok');
+            }
+        }
+
+        return \$next(\$request);
+    }
+}
+EOF
+
+    # =======================
+    # 3. Registrasi Middleware
+    # =======================
     if ! grep -q "whitelistadmin" "$KERNEL"; then
         sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," $KERNEL
     fi
 
+    if ! grep -q "clientlock" "$KERNEL"; then
+        sed -i "/protected \$middlewareAliases = \[/a\        'clientlock' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\ClientServerWhitelist::class," $KERNEL
+    fi
+
+    # =======================
+    # 4. Protect ADMIN routes
+    # =======================
     lock_route() {
-        sed -i "s/\['prefix' => '$1'\]/['prefix' => '$1', 'middleware' => ['whitelistadmin']]/g" $ROUTES
+        sed -i "s/\['prefix' => '$1'\]/['prefix' => '$1', 'middleware' => ['whitelistadmin']]/g" $ROUTES_ADMIN
     }
 
     lock_route "nodes"
@@ -50,10 +101,21 @@ EOF
     lock_route "mounts"
     lock_route "nests"
 
-    # Proteksi delete user
+    # =======================
+    # 5. Protect CLIENT routes
+    # =======================
+    if ! grep -q "clientlock" "$ROUTES_CLIENT"; then
+        sed -i "s/Route::group(\['prefix' => '\/servers'/Route::group(['prefix' => '\/servers', 'middleware' => ['clientlock']]/" $ROUTES_CLIENT
+    fi
+
+    # =======================
+    # 6. Protect delete user
+    # =======================
     sed -i "/public function delete/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $USERCTL
 
-    # Proteksi server actions
+    # =======================
+    # 7. Protect server actions
+    # =======================
     for file in $SERVERDIR/*.php; do
         sed -i "/public function delete/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
         sed -i "/public function destroy/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
@@ -61,29 +123,26 @@ EOF
         sed -i "/public function details/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
     done
 
+    # =======================
+    # 8. Clear cache
+    # =======================
     cd $PTERO
     php artisan route:clear
     php artisan config:clear
-    php artisan view:clear
     php artisan cache:clear
+    php artisan view:clear
     systemctl restart pteroq
 }
 
-add_owner() {
-    echo "Masukkan ID Owner Baru:"
-    read NEW_OWNER
-    sed -i "s/\$allowedAdmins = \[\(.*\)\];/\$allowedAdmins = [\1, $NEW_OWNER];/" $MIDDLEWARE
-    cd $PTERO
-    php artisan route:clear
-}
-
 uninstall_antirusuh() {
-    rm -f $MIDDLEWARE
+    rm -f $MIDDLEWARE_ADMIN
+    rm -f $MIDDLEWARE_CLIENT
 
     sed -i "/'whitelistadmin' =>/d" $KERNEL
+    sed -i "/'clientlock' =>/d" $KERNEL
 
     unlock_route() {
-        sed -i "s/\['prefix' => '$1', 'middleware' => \['whitelistadmin'\]\]/['prefix' => '$1']/g" $ROUTES
+        sed -i "s/\['prefix' => '$1', 'middleware' => \['whitelistadmin'\]\]/['prefix' => '$1']/g" $ROUTES_ADMIN
     }
 
     unlock_route "nodes"
@@ -91,6 +150,8 @@ uninstall_antirusuh() {
     unlock_route "databases"
     unlock_route "mounts"
     unlock_route "nests"
+
+    sed -i "s/'middleware' => \['clientlock'\]//g" $ROUTES_CLIENT
 
     sed -i "/ngapain wok/d" $USERCTL
     for file in $SERVERDIR/*.php; do
@@ -100,25 +161,23 @@ uninstall_antirusuh() {
     cd $PTERO
     php artisan route:clear
     php artisan config:clear
-    php artisan view:clear
     php artisan cache:clear
+    php artisan view:clear
     systemctl restart pteroq
 }
 
 while true
 do
     clear
-    echo "1. Install AntiRusuh"
-    echo "2. Tambahkan Owner"
-    echo "3. Uninstall AntiRusuh"
-    echo "4. Exit"
+    echo "1. Install AntiRusuh + Client Lock"
+    echo "2. Uninstall AntiRusuh"
+    echo "3. Exit"
     read choice
 
     case $choice in
         1) install_antirusuh ;;
-        2) add_owner ;;
-        3) uninstall_antirusuh ;;
-        4) exit ;;
+        2) uninstall_antirusuh ;;
+        3) exit ;;
     esac
 
     read
