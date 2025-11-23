@@ -91,7 +91,7 @@ uninstall_antirusuh(){
 
 while true; do
     clear
-    echo "1. Install AntiRusuh anjing"
+    echo "1. Install AntiRusuh kntl"
     echo "2. Tambahkan Owner"
     echo "3. Uninstall AntiRusuh"
     echo "4. Exit"
