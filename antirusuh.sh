@@ -2,88 +2,47 @@
 set -e
 clear
 
-PANEL_PATH="/var/www/pterodactyl"
-CONFIG_FILE="$PANEL_PATH/config/antirusuh.php"
-
-if [ "$EUID" -ne 0 ]; then
-  echo "Harus root"
-  exit 1
-fi
-
-if [ ! -d "$PANEL_PATH" ]; then
-  echo "Panel tidak ditemukan di $PANEL_PATH"
-  exit 1
-fi
-
-BLADE_CANDIDATES=(
-  "$PANEL_PATH/resources/views/layouts/admin.blade.php"
-  "$PANEL_PATH/resources/views/app.blade.php"
-  "$PANEL_PATH/resources/views/layouts/app.blade.php"
-  "$PANEL_PATH/resources/views/index.blade.php"
-  "$PANEL_PATH/resources/views/application.blade.php"
-)
-
-BLADE_FILE=""
-for f in "${BLADE_CANDIDATES[@]}"; do
-  if [ -f "$f" ]; then
-    BLADE_FILE="$f"
-    break
-  fi
-done
-
-if [ -z "$BLADE_FILE" ]; then
-  echo "File blade tidak ditemukan"
-  exit 1
-fi
+PANEL="/var/www/pterodactyl"
+KERNEL="$PANEL/app/Http/Kernel.php"
+ROUTES="$PANEL/routes/web.php"
+CONFIG="$PANEL/config/antirusuh.php"
+MIDDLE="$PANEL/app/Http/Middleware/AntiRusuh.php"
 
 menu() {
   clear
-  echo "1) Install AntiRusuh danz"
-  echo "2) Hapus AntiRusuh"
-  echo "3) Tambah Owner"
-  echo "4) Update dari GitHub"
+  echo "1) Install AntiRusuh"
+  echo "2) Uninstall AntiRusuh"
+  echo "3) Kelola Owner"
+  echo "4) Update AntiRusuh (Auto GitHub)"
   echo "0) Keluar"
-  read -p "Pilih: " m
-  case $m in
+  read -p "Pilih: " M
+  case $M in
     1) install ;;
     2) uninstall ;;
-    3) addowner ;;
-    4) update ;;
-    0) exit 0 ;;
+    3) owner_menu ;;
+    4) update_antirusuh ;;
+    0) exit ;;
     *) menu ;;
   esac
 }
 
 install() {
+  mkdir -p "$PANEL/config"
+  mkdir -p "$PANEL/app/Http/Middleware"
 
-  rm -f "$PANEL_PATH/app/Http/Middleware/AntiRusuh.php"
-  rm -f "$PANEL_PATH/app/Console/Commands/AntiRusuhClean.php"
-  rm -f "$PANEL_PATH/resources/js/antirusuh.js"
-  rm -f "$PANEL_PATH/config/antirusuh.php"
+  rm -f "$CONFIG" "$MIDDLE"
 
-  rm -f "$PANEL_PATH/bootstrap/cache/*.php" 2>/dev/null || true
-  php "$PANEL_PATH/artisan" optimize:clear >/dev/null 2>&1 || true
-
-  OWNER=$(logname 2>/dev/null || whoami)
-
-  mkdir -p "$PANEL_PATH/config"
-  mkdir -p "$PANEL_PATH/app/Http/Middleware"
-  mkdir -p "$PANEL_PATH/app/Console/Commands"
-  mkdir -p "$PANEL_PATH/resources/js"
-
-  cat > "$CONFIG_FILE" <<EOF
+cat > "$CONFIG" <<EOF
 <?php
 return [
-    'owners' => [
-        '$OWNER'
-    ],
-    'safe_mode' => true,
+  'owners' => [
+    '$(logname)'
+  ]
 ];
 EOF
 
-  cat > "$PANEL_PATH/app/Http/Middleware/AntiRusuh.php" <<'EOF'
+cat > "$MIDDLE" <<'EOF'
 <?php
-
 namespace App\Http\Middleware;
 
 use Closure;
@@ -94,38 +53,36 @@ class AntiRusuh
 {
     public function handle(Request $request, Closure $next)
     {
-        $user = Auth::user();
-        if (!$user) return $next($request);
+        $u = Auth::user();
+        if (!$u) return $next($request);
 
         $owners = config('antirusuh.owners', []);
-        $isOwner = in_array($user->username ?? $user->email, $owners, true);
+        $isOwner = in_array($u->username ?? $u->email, $owners, true);
+
         $uri = $request->path();
 
-        $block = [
-            'admin/nodes',
-            'admin/locations',
-            'admin/servers/*/build',
-            'admin/servers/*/network',
-            'nodes/*/settings',
-            'nodes/*/allocations',
+        $deny = [
+            "admin/locations",
+            "admin/nodes",
+            "admin/servers/*/build",
+            "admin/servers/*/network",
+            "nodes/*"
         ];
 
-        foreach ($block as $p) {
-            $regex = '#^' . str_replace('\*','.*',preg_quote($p,'#')) . '$#';
-            if (preg_match($regex, $uri)) {
-                if (!$isOwner) {
-                    return redirect('/')->with('error','Aksi diblokir AntiRusuh.');
-                }
+        foreach ($deny as $d) {
+            $rg = '#^' . str_replace('\*', '.*', preg_quote($d, '#')) . '$#';
+            if (preg_match($rg, $uri)) {
+                if (!$isOwner) return abort(403, "AntiRusuh aktif.");
             }
         }
 
-        if (preg_match('#^server/([a-zA-Z0-9-]+)#',$uri,$m)) {
-            $uuid = $m[1];
+        if (preg_match('#^server/([a-zA-Z0-9-]+)#', $uri, $m)) {
+            $id = $m[1];
             try {
-                $server = \App\Models\Server::where('uuid',$uuid)
-                     ->orWhere('uuidShort',$uuid)->first();
-                if ($server && $server->owner_id !== $user->id && !$isOwner)
-                    return redirect('/')->with('error','Tidak boleh akses server orang.');
+                $s = \App\Models\Server::where('uuid',$id)
+                     ->orWhere('uuidShort',$id)->first();
+                if ($s && $s->owner_id !== $u->id && !$isOwner)
+                    return abort(403, "AntiRusuh: akses server lain diblokir.");
             } catch (\Throwable $e) {}
         }
 
@@ -134,133 +91,129 @@ class AntiRusuh
 }
 EOF
 
-  cat > "$PANEL_PATH/app/Console/Commands/AntiRusuhClean.php" <<'EOF'
-<?php
+if ! grep -q "antirusuh" "$KERNEL"; then
+  sed -i "/protected \\$middlewareAliases = \\[/a\\        'antirusuh' => \App\Http\Middleware\AntiRusuh::class," "$KERNEL"
+fi
 
-namespace App\Console\Commands;
+if ! grep -q "antirusuh" "$ROUTES"; then
+  sed -i "s/Route::middleware(\['web'\])/Route::middleware(['web','antirusuh'])/" "$ROUTES"
+fi
 
-use Illuminate\Console\Command;
-use App\Models\User;
-use App\Models\Server;
-use Illuminate\Support\Facades\DB;
+cd "$PANEL"
+php artisan optimize:clear
 
-class AntiRusuhClean extends Command
-{
-    protected $signature = 'antirusuh:clean {--force}';
-    protected $description = 'Hapus semua user & server non-owner';
-
-    public function handle()
-    {
-        if (config('antirusuh.safe_mode')) {
-            $this->error('SAFE MODE aktif');
-            return;
-        }
-
-        $owners = config('antirusuh.owners', []);
-        $users = User::whereNotIn('username',$owners)
-                     ->whereNotIn('email',$owners)->get();
-
-        $this->info("User non-owner: ".$users->count());
-
-        if (!$this->option('force')) {
-            $this->warn("Gunakan --force");
-            return;
-        }
-
-        DB::transaction(function () use ($users) {
-            foreach ($users as $u) {
-                Server::where('owner_id',$u->id)->delete();
-                $u->delete();
-            }
-        });
-
-        $this->info("Selesai");
-    }
-}
-EOF
-
-  cat > "$PANEL_PATH/resources/js/antirusuh.js" <<'EOF'
-document.addEventListener("DOMContentLoaded", () => {
-  const owner = document.querySelector('meta[name="antirusuh-owner"]')?.content === "1";
-  if (owner) return;
-  const block = [
-    ".btn-location",
-    ".btn-network",
-    ".btn-build",
-    ".btn-allocations",
-    ".danger-zone",
-    ".btn-admin"
-  ];
-  block.forEach(s => {
-    document.querySelectorAll(s).forEach(b => {
-      b.style.opacity = "0.4";
-      b.style.pointerEvents = "none";
-      b.onclick = e => {
-        e.preventDefault();
-        alert("Aksi diblokir AntiRusuh!");
-      };
-    });
-  });
-});
-EOF
-
-  if ! grep -q "antirusuh" "$PANEL_PATH/app/Http/Kernel.php"; then
-    sed -i "/protected \$routeMiddleware = \[/a\\        'antirusuh' => \App\Http\Middleware\AntiRusuh::class," "$PANEL_PATH/app/Http/Kernel.php"
-  fi
-
-META='<meta name="antirusuh-owner" content="{{ in_array(auth()->user()->username ?? auth()->user()->email, config('\''antirusuh.owners'\'')) ? '\''1'\'' : '\''0'\'' }}">'
-
-  if ! grep -q "antirusuh-owner" "$BLADE_FILE"; then
-    sed -i "/<\/head>/i $META" "$BLADE_FILE"
-  fi
-
-  cd "$PANEL_PATH"
-  php artisan optimize:clear || true
-  php artisan cache:clear || true
-  php artisan config:clear || true
-  php artisan route:clear || true
-
-  echo "AntiRusuh terinstall"
-  sleep 1
-  menu
+echo "AntiRusuh berhasil dipasang!"
+sleep 1
+menu
 }
 
 uninstall() {
 
-  rm -f "$PANEL_PATH/app/Http/Middleware/AntiRusuh.php"
-  rm -f "$PANEL_PATH/app/Console/Commands/AntiRusuhClean.php"
-  rm -f "$PANEL_PATH/resources/js/antirusuh.js"
-  rm -f "$PANEL_PATH/config/antirusuh.php"
+rm -f "$CONFIG" "$MIDDLE"
 
-  sed -i "/antirusuh-owner/d" "$BLADE_FILE"
-  sed -i "/antirusuh/d" "$PANEL_PATH/app/Http/Kernel.php"
+sed -i "/antirusuh/d" "$KERNEL"
+sed -i "s/\['web','antirusuh'\]/\['web'\]/" "$ROUTES"
 
-  cd "$PANEL_PATH"
-  php artisan optimize:clear || true
+cd "$PANEL"
+php artisan optimize:clear
 
-  echo "AntiRusuh dihapus"
-  sleep 1
-  menu
+echo "AntiRusuh dihapus!"
+sleep 1
+menu
 }
 
-addowner() {
-  if [ ! -f "$CONFIG_FILE" ]; then
-    echo "Belum terinstall"
+owner_menu() {
+  clear
+  echo "1) Lihat Owner"
+  echo "2) Tambah Owner dari User Panel"
+  echo "3) Hapus Owner"
+  echo "0) Kembali"
+  read -p "Pilih: " O
+
+  case $O in
+    1) list_owner ;;
+    2) add_owner ;;
+    3) del_owner ;;
+    0) menu ;;
+    *) owner_menu ;;
+  esac
+}
+
+list_owner() {
+  clear
+  php artisan tinker --execute="print_r(config('antirusuh.owners'));"
+  read -p "Enter untuk lanjut..."
+  owner_menu
+}
+
+add_owner() {
+  clear
+  USERS=$(php artisan tinker --execute="echo json_encode(\App\Models\User::select(['id','username'])->get());")
+
+  INDEX=1
+  echo "Daftar User Panel:"
+  echo "$USERS" | jq -c '.[]' | while read -r u; do
+    echo "$INDEX) $(echo $u | jq -r '.username')"
+    INDEX=$((INDEX+1))
+  done
+
+  read -p "Pilih nomor user: " N
+  SELECTED=$(echo "$USERS" | jq -r ".[$((N-1))].username")
+
+  if [ "$SELECTED" != "null" ]; then
+    sed -i "/'owners' => \[/a\\        '$SELECTED'," "$CONFIG"
+    echo "Owner ditambahkan: $SELECTED"
+  else
+    echo "Pilihan tidak valid"
+  fi
+
+  sleep 1
+  owner_menu
+}
+
+del_owner() {
+  clear
+  OWNERS=$(php artisan tinker --execute="echo json_encode(config('antirusuh.owners'));")
+
+  INDEX=1
+  echo "Owner saat ini:"
+  echo "$OWNERS" | jq -c '.[]' | while read -r u; do
+    echo "$INDEX) $u"
+    INDEX=$((INDEX+1))
+  done
+
+  read -p "Pilih nomor owner yang ingin dihapus: " R
+  TARGET=$(echo "$OWNERS" | jq -r ".[$((R-1))]")
+
+  if [ "$TARGET" != "null" ]; then
+    sed -i "/'$TARGET'/d" "$CONFIG"
+    echo "Owner dihapus: $TARGET"
+  else
+    echo "Pilihan tidak valid"
+  fi
+
+  sleep 1
+  owner_menu
+}
+
+update_antirusuh() {
+  clear
+  echo "Mengambil update dari GitHub..."
+
+  REPO="https://raw.githubusercontent.com/daniars1121-svg/antirusuhbydanzztsuyoi/main/antirusuh.sh"
+
+  curl -s "$REPO" -o /root/antirusuh_update.sh
+
+  if [ ! -f /root/antirusuh_update.sh ]; then
+    echo "Gagal mengambil update!"
     sleep 1
     menu
   fi
-  read -p "Owner baru: " nw
-  sed -i "/'owners' => \[/a\\        '$nw'," "$CONFIG_FILE"
-  echo "Owner ditambahkan"
-  sleep 1
-  menu
-}
 
-update() {
-  cd /root/antirusuh 2>/dev/null || git clone https://github.com/daniars1121-svg/antirusuhbydanzztsuyoi /root/antirusuh
-  cd /root/antirusuh
-  git pull
-  bash antirusuh.sh
+  chmod +x /root/antirusuh_update.sh
+  echo "Update berhasil. Menjalankan script baru..."
+  bash /root/antirusuh_update.sh
+  exit
 }
 
 menu
