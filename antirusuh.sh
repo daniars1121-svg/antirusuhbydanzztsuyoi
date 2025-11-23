@@ -48,13 +48,13 @@ EOF
     lock_route "mounts"
     lock_route "nests"
 
-    sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $USERCTL
+    sed -i "/public function delete/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $USERCTL
 
     for file in $SERVERDIR/*.php; do
-        sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
-        sed -i "/public function destroy/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
-        sed -i "/public function view/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
-        sed -i "/public function details/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function delete/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function destroy/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function view/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function details/!b;n;/}/i\        \$allowedAdmins = [$OWNER_ID];\n        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
     done
 
     cd $PTERO
@@ -103,7 +103,7 @@ uninstall_antirusuh() {
 while true
 do
     clear
-    echo "1. Install AntiRusuh dontol"
+    echo "1. Install AntiRusuh"
     echo "2. Tambahkan Owner"
     echo "3. Uninstall AntiRusuh"
     echo "4. Exit"
