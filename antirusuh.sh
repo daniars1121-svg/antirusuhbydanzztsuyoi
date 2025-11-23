@@ -5,7 +5,7 @@ ROUTES="$PTERO/routes/admin.php"
 MIDDLEWARE="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
 KERNEL="$PTERO/app/Http/Kernel.php"
 USERCTL="$PTERO/app/Http/Controllers/Admin/UserController.php"
-SERVERCTL="$PTERO/app/Http/Controllers/Admin/ServerController.php"
+SERVERDIR="$PTERO/app/Http/Controllers/Admin/Servers"
 
 install_antirusuh() {
     echo "Masukkan ID Owner:"
@@ -38,21 +38,24 @@ EOF
         sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," $KERNEL
     fi
 
-    protect_route() {
+    lock_route() {
         sed -i "s/\['prefix' => '$1'\]/['prefix' => '$1', 'middleware' => ['whitelistadmin']]/g" $ROUTES
     }
 
-    protect_route "nodes"
-    protect_route "locations"
-    protect_route "databases"
-    protect_route "mounts"
-    protect_route "nests"
+    lock_route "nodes"
+    lock_route "locations"
+    lock_route "databases"
+    lock_route "mounts"
+    lock_route "nests"
 
     sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $USERCTL
 
-    sed -i "/public function destroy/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $SERVERCTL
-    sed -i "/public function view/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $SERVERCTL
-    sed -i "/public function details/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $SERVERCTL
+    for file in $SERVERDIR/*.php; do
+        sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function destroy/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function view/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+        sed -i "/public function details/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $file
+    done
 
     cd $PTERO
     php artisan route:clear
@@ -68,25 +71,26 @@ add_owner() {
     sed -i "s/\$allowedAdmins = \[\(.*\)\];/\$allowedAdmins = [\1, $NEW_OWNER];/" $MIDDLEWARE
     cd $PTERO
     php artisan route:clear
-    php artisan cache:clear
 }
 
 uninstall_antirusuh() {
     rm -f $MIDDLEWARE
     sed -i "/'whitelistadmin' =>/d" $KERNEL
 
-    restore_route() {
+    unlock_route() {
         sed -i "s/\['prefix' => '$1', 'middleware' => \['whitelistadmin'\]\]/['prefix' => '$1']/g" $ROUTES
     }
 
-    restore_route "nodes"
-    restore_route "locations"
-    restore_route "databases"
-    restore_route "mounts"
-    restore_route "nests"
+    unlock_route "nodes"
+    unlock_route "locations"
+    unlock_route "databases"
+    unlock_route "mounts"
+    unlock_route "nests"
 
     sed -i "/ngapain wok/d" $USERCTL
-    sed -i "/ngapain wok/d" $SERVERCTL
+    for file in $SERVERDIR/*.php; do
+        sed -i "/ngapain wok/d" $file
+    done
 
     cd $PTERO
     php artisan route:clear
@@ -99,7 +103,7 @@ uninstall_antirusuh() {
 while true
 do
     clear
-    echo "1. Install AntiRusuh by danzzz"
+    echo "1. Install AntiRusuh"
     echo "2. Tambahkan Owner"
     echo "3. Uninstall AntiRusuh"
     echo "4. Exit"
