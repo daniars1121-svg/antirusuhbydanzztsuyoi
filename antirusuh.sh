@@ -2,8 +2,10 @@
 
 PTERO="/var/www/pterodactyl"
 ROUTES="$PTERO/routes/admin.php"
-MIDDLEWARE="$PTERO/app/Http/Middleware/AntiRusuh.php"
+MIDDLEWARE="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
 KERNEL="$PTERO/app/Http/Kernel.php"
+USERCTL="$PTERO/app/Http/Controllers/Admin/UserController.php"
+SERVERCTL="$PTERO/app/Http/Controllers/Admin/ServerController.php"
 
 install_antirusuh() {
     echo "Masukkan ID Owner:"
@@ -17,13 +19,13 @@ namespace App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 
-class AntiRusuh
+class WhitelistAdmin
 {
     public function handle(Request \$request, Closure \$next)
     {
-        \$allowed = [$OWNER_ID];
+        \$allowedAdmins = [$OWNER_ID];
 
-        if (!in_array(\$request->user()->id, \$allowed)) {
+        if (!in_array(\$request->user()->id, \$allowedAdmins)) {
             abort(403, 'ngapain wok');
         }
 
@@ -32,23 +34,25 @@ class AntiRusuh
 }
 EOF
 
-    if ! grep -q "antirusuh" "$KERNEL"; then
-        sed -i "/protected \$middlewareAliases = \[/a\        'antirusuh' => \\\\App\\\\Http\\\\Middleware\\\\AntiRusuh::class," $KERNEL
+    if ! grep -q "whitelistadmin" "$KERNEL"; then
+        sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," $KERNEL
     fi
 
-    patch_route() {
-        prefix=$1
-        sed -i "s/\['prefix' => '$prefix'\]/['prefix' => '$prefix', 'middleware' => ['antirusuh']]/g" $ROUTES
+    protect_route() {
+        sed -i "s/\['prefix' => '$1'\]/['prefix' => '$1', 'middleware' => ['whitelistadmin']]/g" $ROUTES
     }
 
-    patch_route "nodes"
-    patch_route "locations"
-    patch_route "databases"
-    patch_route "servers"
-    patch_route "users"
-    patch_route "mounts"
-    patch_route "nests"
-    patch_route "settings"
+    protect_route "nodes"
+    protect_route "locations"
+    protect_route "databases"
+    protect_route "mounts"
+    protect_route "nests"
+
+    sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $USERCTL
+
+    sed -i "/public function destroy/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $SERVERCTL
+    sed -i "/public function view/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $SERVERCTL
+    sed -i "/public function details/!b;n;/}/i\        if (!in_array(auth()->user()->id, \$allowedAdmins)) abort(403, 'ngapain wok');" $SERVERCTL
 
     cd $PTERO
     php artisan route:clear
@@ -59,11 +63,9 @@ EOF
 }
 
 add_owner() {
-    echo "Masukkan ID Owner baru:"
+    echo "Masukkan ID Owner Baru:"
     read NEW_OWNER
-
-    sed -i "s/\$allowed = \[\(.*\)\];/\$allowed = [\1, $NEW_OWNER];/" $MIDDLEWARE
-
+    sed -i "s/\$allowedAdmins = \[\(.*\)\];/\$allowedAdmins = [\1, $NEW_OWNER];/" $MIDDLEWARE
     cd $PTERO
     php artisan route:clear
     php artisan cache:clear
@@ -71,22 +73,20 @@ add_owner() {
 
 uninstall_antirusuh() {
     rm -f $MIDDLEWARE
-
-    sed -i "/'antirusuh' =>/d" $KERNEL
+    sed -i "/'whitelistadmin' =>/d" $KERNEL
 
     restore_route() {
-        prefix=$1
-        sed -i "s/\['prefix' => '$prefix', 'middleware' => \['antirusuh'\]\]/['prefix' => '$prefix']/g" $ROUTES
+        sed -i "s/\['prefix' => '$1', 'middleware' => \['whitelistadmin'\]\]/['prefix' => '$1']/g" $ROUTES
     }
 
     restore_route "nodes"
     restore_route "locations"
     restore_route "databases"
-    restore_route "servers"
-    restore_route "users"
     restore_route "mounts"
     restore_route "nests"
-    restore_route "settings"
+
+    sed -i "/ngapain wok/d" $USERCTL
+    sed -i "/ngapain wok/d" $SERVERCTL
 
     cd $PTERO
     php artisan route:clear
@@ -99,8 +99,8 @@ uninstall_antirusuh() {
 while true
 do
     clear
-    echo "1. Install AntiRusuh"
-    echo "2. Tambah Owner"
+    echo "1. Install AntiRusuh by danzzz"
+    echo "2. Tambahkan Owner"
     echo "3. Uninstall AntiRusuh"
     echo "4. Exit"
     read choice
@@ -111,4 +111,6 @@ do
         3) uninstall_antirusuh ;;
         4) exit ;;
     esac
+
+    read
 done
