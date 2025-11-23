@@ -10,7 +10,7 @@ MIDDLE="$PANEL/app/Http/Middleware/AntiRusuh.php"
 
 menu() {
   clear
-  echo "1) Install AntiRusuh"
+  echo "1) Install AntiRusuh by danz"
   echo "2) Uninstall AntiRusuh"
   echo "3) Kelola Owner"
   echo "4) Update AntiRusuh (Auto GitHub)"
@@ -95,8 +95,8 @@ if ! grep -q "antirusuh" "$KERNEL"; then
   sed -i "/protected \\$middlewareAliases = \\[/a\\        'antirusuh' => \App\Http\Middleware\AntiRusuh::class," "$KERNEL"
 fi
 
-if ! grep -q "antirusuh" "$ROUTES"; then
-  sed -i "s/Route::middleware(\['web'\])/Route::middleware(['web','antirusuh'])/" "$ROUTES"
+if grep -q "'panel'" "$KERNEL"; then
+  sed -i "/'panel' => \[/a\            \App\Http\Middleware\AntiRusuh::class," "$KERNEL"
 fi
 
 cd "$PANEL"
