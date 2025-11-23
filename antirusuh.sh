@@ -4,178 +4,103 @@ PTERO="/var/www/pterodactyl"
 ROUTES="$PTERO/routes/admin.php"
 KERNEL="$PTERO/app/Http/Kernel.php"
 MW="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
+USERCTL="$PTERO/app/Http/Controllers/Admin/UserController.php"
+SERVERDIR="$PTERO/app/Http/Controllers/Admin/Servers"
 
-###################################################
-# AUTO FIX admin.php
-###################################################
-autofix_routes() {
-    echo "[AUTO-FIX] Memperbaiki admin.php..."
-
-    # Perbaiki koma ganda
-    sed -i 's/,,/,/g' $ROUTES
-
-    # Perbaiki kurung array yang rusak
-    sed -i 's/\],]/],/g' $ROUTES
-    sed -i 's/\],,/\],/g' $ROUTES
-
-    # Perbaiki route 'middleware' => []
-    sed -i "s/'middleware' => \[\],//g" $ROUTES
-
-    # Perbaiki prefix yang hilang
-    sed -i "s/'prefix' => 'nodes', 'middleware/'prefix' => 'nodes','middleware/g" $ROUTES
-    sed -i "s/'prefix' => 'locations', 'middleware/'prefix' => 'locations','middleware/g" $ROUTES
-    sed -i "s/'prefix' => 'nests', 'middleware/'prefix' => 'nests','middleware/g" $ROUTES
-    sed -i "s/'prefix' => 'mounts', 'middleware/'prefix' => 'mounts','middleware/g" $ROUTES
-    sed -i "s/'prefix' => 'databases', 'middleware/'prefix' => 'databases','middleware/g" $ROUTES
-
-    echo "[OK] admin.php diperbaiki"
+backup(){
+    cp $ROUTES $ROUTES.bak_$(date +%s)
+    cp $KERNEL $KERNEL.bak_$(date +%s)
 }
 
-###################################################
-# AUTO FIX Kernel.php
-###################################################
-autofix_kernel() {
-    echo "[AUTO-FIX] Memperbaiki Kernel.php..."
-
-    # Hapus baris rusak
-    sed -i "/WhitelistAdm in/d" $KERNEL
-
-    # Pastikan entry bersih
+fix_kernel(){
     sed -i "/whitelistadmin/d" $KERNEL
-
-    # Tambahkan middleware fresh
-    sed -i "/'throttle' =>/a \ \ \ \ 'whitelistadmin' => \App\\\Http\\\Middleware\\\WhitelistAdmin::class," $KERNEL
-
-    echo "[OK] Kernel.php aman"
+    sed -i "/'throttle' => ThrottleRequests::class,/a\        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," $KERNEL
 }
 
-###################################################
-# AUTO FIX Middleware
-###################################################
-autofix_middleware() {
-    echo "[AUTO-FIX] Memeriksa WhitelistAdmin.php..."
-
-    if ! grep -q "WhitelistAdmin" $MW; then
-        echo "[AUTO-FIX] Middleware hilang, membuat ulang..."
-
-cat > $MW <<EOF
-<?php
-
-namespace App\Http\Middleware;
-
-use Closure;
-use Illuminate\Http\Request;
-
-class WhitelistAdmin
-{
-    public function handle(Request \$request, Closure \$next)
-    {
-        \$allowedAdmins = [1];
-
-        if (!in_array(\$request->user()->id, \$allowedAdmins)) {
-            abort(403, 'ngapain wok');
-        }
-
-        return \$next(\$request);
-    }
-}
-EOF
-
-    fi
-
-    echo "[OK] Middleware verified"
+fix_routes(){
+    perl -0777 -pe "s/Route::group\(\['prefix' => 'nodes'],/Route::group(['prefix' => 'nodes','middleware'=>['whitelistadmin']],/g" -i $ROUTES
+    perl -0777 -pe "s/Route::group\(\['prefix' => 'locations'],/Route::group(['prefix' => 'locations','middleware'=>['whitelistadmin']],/g" -i $ROUTES
+    perl -0777 -pe "s/Route::group\(\['prefix' => 'databases'],/Route::group(['prefix' => 'databases','middleware'=>['whitelistadmin']],/g" -i $ROUTES
+    perl -0777 -pe "s/Route::group\(\['prefix' => 'mounts'],/Route::group(['prefix' => 'mounts','middleware'=>['whitelistadmin']],/g" -i $ROUTES
+    perl -0777 -pe "s/Route::group\(\['prefix' => 'nests'],/Route::group(['prefix' => 'nests','middleware'=>['whitelistadmin']],/g" -i $ROUTES
 }
 
-###################################################
-# INSTALL ANTI RUSUH
-###################################################
-install_antirusuh() {
-    echo "Masukkan ID Owner:"
+block_delete_user(){
+    sed -i "s#Route::delete('/view/{user:id}'.*#Route::delete('/view/{user:id}', function(){ abort(403,'ngapain wok'); })->middleware('whitelistadmin');#g" $ROUTES
+}
+
+block_server_actions(){
+    for file in $SERVERDIR/*.php; do
+        sed -i "/public function delete/!b;n;/}/i\        if (!in_array(auth()->user()->id, [OWNER_ID])) abort(403, 'ngapain wok');" $file
+        sed -i "/public function destroy/!b;n;/}/i\        if (!in_array(auth()->user()->id, [OWNER_ID])) abort(403, 'ngapain wok');" $file
+        sed -i "/public function view/!b;n;/}/i\        if (!in_array(auth()->user()->id, [OWNER_ID])) abort(403, 'ngapain wok');" $file
+        sed -i "/public function details/!b;n;/}/i\        if (!in_array(auth()->user()->id, [OWNER_ID])) abort(403, 'ngapain wok');" $file
+    done
+}
+
+install_antirusuh(){
+    backup
+    echo -n "Masukkan ID Owner: "
     read OWNER_ID
 
-cat > $MW <<EOF
+cat > $MW << EOF
 <?php
-
 namespace App\Http\Middleware;
-
 use Closure;
 use Illuminate\Http\Request;
 
-class WhitelistAdmin
-{
-    public function handle(Request \$request, Closure \$next)
-    {
+class WhitelistAdmin{
+    public function handle(Request \$request, Closure \$next){
         \$allowedAdmins = [$OWNER_ID];
-
-        if (!in_array(\$request->user()->id, \$allowedAdmins)) {
-            abort(403, 'ngapain wok');
+        if(!in_array(\$request->user()->id, \$allowedAdmins)){
+            abort(403,'ngapain wok');
         }
-
         return \$next(\$request);
     }
 }
 EOF
 
-    autofix_kernel
+    fix_kernel
+    fix_routes
+    block_delete_user
+    block_server_actions
 
-    sed -i "s/Route::group(['prefix' => 'nodes'],/Route::group(['prefix' => 'nodes','middleware' => ['whitelistadmin']],/g" $ROUTES
-    sed -i "s/Route::group(['prefix' => 'locations'],/Route::group(['prefix' => 'locations','middleware' => ['whitelistadmin']],/g" $ROUTES
-    sed -i "s/Route::group(['prefix' => 'databases'],/Route::group(['prefix' => 'databases','middleware' => ['whitelistadmin']],/g" $ROUTES
-    sed -i "s/Route::group(['prefix' => 'mounts'],/Route::group(['prefix' => 'mounts','middleware' => ['whitelistadmin']],/g" $ROUTES
-    sed -i "s/Route::group(['prefix' => 'nests'],/Route::group(['prefix' => 'nests','middleware' => ['whitelistadmin']],/g" $ROUTES
-
-    autofix_routes
-
-    cd $PTERO && php artisan optimize:clear
-
-    echo "AntiRusuh berhasil diinstall!"
+    cd $PTERO
+    php artisan optimize:clear
+    echo "AntiRusuh berhasil diinstall"
 }
 
-###################################################
-# TAMBAH OWNER
-###################################################
-add_owner() {
-    echo "Masukkan ID Owner tambahan:"
-    read NEW_ID
-    sed -i "s/\[\(.*\)\]/[\1,$NEW_ID]/" $MW
-    cd $PTERO && php artisan optimize:clear
-    echo "Owner baru berhasil ditambahkan!"
+add_owner(){
+    echo -n "Masukkan ID Owner tambahan: "
+    read NEW
+    sed -i "s/\\\$allowedAdmins = \[\(.*\)\];/\$allowedAdmins = [\1,$NEW];/" $MW
+    php $PTERO/artisan optimize:clear
 }
 
-###################################################
-# UNINSTALL (ADA AUTO-FIX)
-###################################################
-uninstall_antirusuh() {
-    sed -i "/whitelistadmin/d" $KERNEL
-    sed -i "s/,'middleware' => \['whitelistadmin'\]//g" $ROUTES
+uninstall_antirusuh(){
+    backup
     rm -f $MW
+    sed -i "/whitelistadmin/d" $KERNEL
+    perl -0777 -pe "s/,'middleware'=>\['whitelistadmin'\]//g" -i $ROUTES
+    sed -i "/ngapain wok/d" $ROUTES
 
-    autofix_routes
-    autofix_kernel
-
-    cd $PTERO && php artisan optimize:clear
-
-    echo "AntiRusuh berhasil dihapus!"
+    cd $PTERO
+    php artisan optimize:clear
+    echo "AntiRusuh dihapus, panel kembali seperti semula"
 }
 
-###################################################
-# MENU
-###################################################
-menu() {
+while true; do
     clear
-    echo "1. Install AntiRusuh"
+    echo "1. Install AntiRusuh anjing"
     echo "2. Tambahkan Owner"
     echo "3. Uninstall AntiRusuh"
     echo "4. Exit"
-    read -p "Pilih menu: " pil
+    read -p "Pilih: " x
 
-    case $pil in
+    case $x in
         1) install_antirusuh ;;
         2) add_owner ;;
         3) uninstall_antirusuh ;;
         4) exit ;;
-        *) echo "Pilihan salah" ;;
     esac
-}
-
-menu
+done
