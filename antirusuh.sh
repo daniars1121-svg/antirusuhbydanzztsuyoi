@@ -4,13 +4,12 @@ clear
 
 PANEL="/var/www/pterodactyl"
 KERNEL="$PANEL/app/Http/Kernel.php"
-ROUTES="$PANEL/routes/web.php"
 CONFIG="$PANEL/config/antirusuh.php"
 MIDDLE="$PANEL/app/Http/Middleware/AntiRusuh.php"
 
 menu() {
   clear
-  echo "1) Install AntiRusuh by danz"
+  echo "1) Install AntiRusuh tsuyoi"
   echo "2) Uninstall AntiRusuh"
   echo "3) Kelola Owner"
   echo "4) Update AntiRusuh (Auto GitHub)"
@@ -27,10 +26,11 @@ menu() {
 }
 
 install() {
-  mkdir -p "$PANEL/config"
-  mkdir -p "$PANEL/app/Http/Middleware"
 
-  rm -f "$CONFIG" "$MIDDLE"
+mkdir -p "$PANEL/config"
+mkdir -p "$PANEL/app/Http/Middleware"
+
+rm -f "$CONFIG" "$MIDDLE"
 
 cat > "$CONFIG" <<EOF
 <?php
@@ -70,19 +70,19 @@ class AntiRusuh
         ];
 
         foreach ($deny as $d) {
-            $rg = '#^' . str_replace('\*', '.*', preg_quote($d, '#')) . '$#';
-            if (preg_match($rg, $uri)) {
-                if (!$isOwner) return abort(403, "AntiRusuh aktif.");
+            $rg = '#^' . str_replace('\*','.*',preg_quote($d,'#')) . '$#';
+            if (preg_match($rg,$uri)) {
+                if (!$isOwner) return abort(403,"AntiRusuh aktif.");
             }
         }
 
-        if (preg_match('#^server/([a-zA-Z0-9-]+)#', $uri, $m)) {
+        if (preg_match('#^server/([a-zA-Z0-9-]+)#',$uri,$m)) {
             $id = $m[1];
             try {
-                $s = \App\Models\Server::where('uuid',$id)
-                     ->orWhere('uuidShort',$id)->first();
+                $s=\App\Models\Server::where('uuid',$id)
+                    ->orWhere('uuidShort',$id)->first();
                 if ($s && $s->owner_id !== $u->id && !$isOwner)
-                    return abort(403, "AntiRusuh: akses server lain diblokir.");
+                    return abort(403,"AntiRusuh: akses server orang diblokir.");
             } catch (\Throwable $e) {}
         }
 
@@ -91,11 +91,8 @@ class AntiRusuh
 }
 EOF
 
-if ! grep -q "antirusuh" "$KERNEL"; then
-  sed -i "/protected \\$middlewareAliases = \\[/a\\        'antirusuh' => \App\Http\Middleware\AntiRusuh::class," "$KERNEL"
-fi
-
-if grep -q "'panel'" "$KERNEL"; then
+# INJECT KE GROUP 'panel' BUKAN KE ROUTES
+if ! grep -q "AntiRusuh::class" "$KERNEL"; then
   sed -i "/'panel' => \[/a\            \App\Http\Middleware\AntiRusuh::class," "$KERNEL"
 fi
 
@@ -111,8 +108,7 @@ uninstall() {
 
 rm -f "$CONFIG" "$MIDDLE"
 
-sed -i "/antirusuh/d" "$KERNEL"
-sed -i "s/\['web','antirusuh'\]/\['web'\]/" "$ROUTES"
+sed -i "/AntiRusuh/d" "$KERNEL"
 
 cd "$PANEL"
 php artisan optimize:clear
@@ -148,12 +144,12 @@ list_owner() {
 
 add_owner() {
   clear
-  USERS=$(php artisan tinker --execute="echo json_encode(\App\Models\User::select(['id','username'])->get());")
+  USERS=$(php artisan db:query "SELECT id, username FROM users" --json)
 
   INDEX=1
   echo "Daftar User Panel:"
-  echo "$USERS" | jq -c '.[]' | while read -r u; do
-    echo "$INDEX) $(echo $u | jq -r '.username')"
+  echo "$USERS" | jq -c '.[]' | while read -r row; do
+    echo "$INDEX) $(echo $row | jq -r '.username')"
     INDEX=$((INDEX+1))
   done
 
@@ -177,8 +173,8 @@ del_owner() {
 
   INDEX=1
   echo "Owner saat ini:"
-  echo "$OWNERS" | jq -c '.[]' | while read -r u; do
-    echo "$INDEX) $u"
+  echo "$OWNERS" | jq -c '.[]' | while read -r row; do
+    echo "$INDEX) $row"
     INDEX=$((INDEX+1))
   done
 
@@ -198,20 +194,13 @@ del_owner() {
 
 update_antirusuh() {
   clear
-  echo "Mengambil update dari GitHub..."
+  echo "Mengambil update terbaru..."
 
   REPO="https://raw.githubusercontent.com/daniars1121-svg/antirusuhbydanzztsuyoi/main/antirusuh.sh"
 
   curl -s "$REPO" -o /root/antirusuh_update.sh
 
-  if [ ! -f /root/antirusuh_update.sh ]; then
-    echo "Gagal mengambil update!"
-    sleep 1
-    menu
-  fi
-
   chmod +x /root/antirusuh_update.sh
-  echo "Update berhasil. Menjalankan script baru..."
   bash /root/antirusuh_update.sh
   exit
 }
