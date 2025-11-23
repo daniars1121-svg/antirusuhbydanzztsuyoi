@@ -7,9 +7,20 @@ KERNEL="$PANEL/app/Http/Kernel.php"
 CONFIG="$PANEL/config/antirusuh.php"
 MIDDLE="$PANEL/app/Http/Middleware/AntiRusuh.php"
 
+# ensure panel folder exists
+if [ ! -d "$PANEL" ]; then
+  echo "Panel tidak ditemukan di $PANEL"
+  exit 1
+fi
+
+# helper: run artisan inside panel dir
+run_artisan() {
+  (cd "$PANEL" && php artisan "$@")
+}
+
 menu() {
   clear
-  echo "1) Install AntiRusuh tsuyoi"
+  echo "1) Install AntiRusuh by danz anjay"
   echo "2) Uninstall AntiRusuh"
   echo "3) Kelola Owner"
   echo "4) Update AntiRusuh (Auto GitHub)"
@@ -20,19 +31,18 @@ menu() {
     2) uninstall ;;
     3) owner_menu ;;
     4) update_antirusuh ;;
-    0) exit ;;
+    0) exit 0 ;;
     *) menu ;;
   esac
 }
 
 install() {
+  mkdir -p "$PANEL/config"
+  mkdir -p "$PANEL/app/Http/Middleware"
 
-mkdir -p "$PANEL/config"
-mkdir -p "$PANEL/app/Http/Middleware"
+  rm -f "$CONFIG" "$MIDDLE"
 
-rm -f "$CONFIG" "$MIDDLE"
-
-cat > "$CONFIG" <<EOF
+  cat > "$CONFIG" <<EOF
 <?php
 return [
   'owners' => [
@@ -41,7 +51,7 @@ return [
 ];
 EOF
 
-cat > "$MIDDLE" <<'EOF'
+  cat > "$MIDDLE" <<'EOF'
 <?php
 namespace App\Http\Middleware;
 
@@ -91,31 +101,49 @@ class AntiRusuh
 }
 EOF
 
-# INJECT KE GROUP 'panel' BUKAN KE ROUTES
-if ! grep -q "AntiRusuh::class" "$KERNEL"; then
-  sed -i "/'panel' => \[/a\            \App\Http\Middleware\AntiRusuh::class," "$KERNEL"
-fi
+  # inject middleware: try middlewareAliases first, then 'panel' group
+  if grep -q "protected \$middlewareAliases" "$KERNEL"; then
+    if ! grep -q "antirusuh" "$KERNEL"; then
+      sed -i "/protected \$middlewareAliases = \[/a\        'antirusuh' => \App\Http\Middleware\AntiRusuh::class," "$KERNEL"
+      echo "Middleware alias 'antirusuh' ditambahkan ke Kernel."
+    else
+      echo "Middleware alias 'antirusuh' sudah ada di Kernel."
+    fi
+  fi
 
-cd "$PANEL"
-php artisan optimize:clear
+  # if there's a 'panel' middleware group, insert the class into it (avoid duplicates)
+  if grep -q "'panel' => \[" "$KERNEL"; then
+    if ! grep -q "App\\\\Http\\\\Middleware\\\\AntiRusuh::class" "$KERNEL"; then
+      sed -i "/'panel' => \[/a\            \\App\\Http\\Middleware\\AntiRusuh::class," "$KERNEL"
+      echo "AntiRusuh class ditambahkan ke group 'panel'."
+    else
+      echo "AntiRusuh class sudah ada di group 'panel'."
+    fi
+  fi
 
-echo "AntiRusuh berhasil dipasang!"
-sleep 1
-menu
+  # clear caches from inside panel dir to ensure kernel/config reload
+  echo "Membersihkan cache Laravel..."
+  run_artisan optimize:clear || true
+  run_artisan config:cache || true
+
+  echo "AntiRusuh berhasil dipasang!"
+  sleep 1
+  menu
 }
 
 uninstall() {
+  rm -f "$CONFIG" "$MIDDLE"
 
-rm -f "$CONFIG" "$MIDDLE"
+  # remove alias and class mentions
+  sed -i "/antirusuh/d" "$KERNEL"
+  sed -i "/App\\\\Http\\\\Middleware\\\\AntiRusuh::class/d" "$KERNEL"
 
-sed -i "/AntiRusuh/d" "$KERNEL"
+  # clear caches
+  run_artisan optimize:clear || true
 
-cd "$PANEL"
-php artisan optimize:clear
-
-echo "AntiRusuh dihapus!"
-sleep 1
-menu
+  echo "AntiRusuh dihapus!"
+  sleep 1
+  menu
 }
 
 owner_menu() {
@@ -137,30 +165,70 @@ owner_menu() {
 
 list_owner() {
   clear
-  php artisan tinker --execute="print_r(config('antirusuh.owners'));"
+  run_artisan tinker --execute="print_r(config('antirusuh.owners'))" || echo "Gagal menampilkan owner (artisan)."
   read -p "Enter untuk lanjut..."
   owner_menu
 }
 
 add_owner() {
   clear
-  USERS=$(php artisan db:query "SELECT id, username FROM users" --json)
+  # try db:query --json (clean output). If fails, fallback to tinker but filter non-json.
+  USERS_JSON=""
+  if (cd "$PANEL" && php artisan help db:query >/dev/null 2>&1); then
+    USERS_JSON=$(cd "$PANEL" && php artisan db:query "SELECT id, username FROM users" --json 2>/dev/null || true)
+  fi
 
-  INDEX=1
+  if [ -z "$USERS_JSON" ]; then
+    # fallback: use tinker but attempt to output pure json
+    USERS_JSON=$(cd "$PANEL" && php artisan tinker --execute="echo json_encode(\App\Models\User::select(['id','username'])->get());" 2>/dev/null || true)
+    # strip non-json lines (attempt)
+    USERS_JSON=$(echo "$USERS_JSON" | sed -n '/^\[/{p;:a;N;/\]$/!ba;p}')
+  fi
+
+  if [ -z "$USERS_JSON" ]; then
+    echo "Gagal mengambil daftar user."
+    sleep 1
+    owner_menu
+    return
+  fi
+
+  # ensure jq available, otherwise use simple awk parsing
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq tidak ditemukan, akan dipasang (minta sudo jika perlu)..."
+    if command -v apt >/dev/null 2>&1; then
+      apt update && apt install -y jq || true
+    fi
+  fi
+
   echo "Daftar User Panel:"
-  echo "$USERS" | jq -c '.[]' | while read -r row; do
-    echo "$INDEX) $(echo $row | jq -r '.username')"
-    INDEX=$((INDEX+1))
-  done
+  if command -v jq >/dev/null 2>&1; then
+    echo "$USERS_JSON" | jq -c '.[]' | nl -w2 -s') '
+  else
+    # naive listing: show lines with username
+    echo "$USERS_JSON"
+  fi
 
   read -p "Pilih nomor user: " N
-  SELECTED=$(echo "$USERS" | jq -r ".[$((N-1))].username")
+  if command -v jq >/dev/null 2>&1; then
+    SELECTED=$(echo "$USERS_JSON" | jq -r ".[$((N-1))].username" 2>/dev/null || echo "")
+  else
+    SELECTED=$(echo "$USERS_JSON" | sed -n "$N p" | sed -E "s/.*\"username\"\s*:\s*\"([^\"]+)\".*/\1/")
+  fi
 
-  if [ "$SELECTED" != "null" ]; then
+  if [ -n "$SELECTED" ] && [ "$SELECTED" != "null" ]; then
+    # ensure config exists
+    if [ ! -f "$CONFIG" ]; then
+      cat > "$CONFIG" <<EOF
+<?php
+return [
+  'owners' => []
+];
+EOF
+    fi
     sed -i "/'owners' => \[/a\\        '$SELECTED'," "$CONFIG"
     echo "Owner ditambahkan: $SELECTED"
   else
-    echo "Pilihan tidak valid"
+    echo "Pilihan tidak valid."
   fi
 
   sleep 1
@@ -169,23 +237,25 @@ add_owner() {
 
 del_owner() {
   clear
-  OWNERS=$(php artisan tinker --execute="echo json_encode(config('antirusuh.owners'));")
-
-  INDEX=1
-  echo "Owner saat ini:"
-  echo "$OWNERS" | jq -c '.[]' | while read -r row; do
-    echo "$INDEX) $row"
-    INDEX=$((INDEX+1))
-  done
+  OWNERS=$(cd "$PANEL" && php artisan tinker --execute="echo json_encode(config('antirusuh.owners'))" 2>/dev/null || echo "[]")
+  if command -v jq >/dev/null 2>&1; then
+    echo "$OWNERS" | jq -c '.[]' | nl -w2 -s') '
+  else
+    echo "$OWNERS"
+  fi
 
   read -p "Pilih nomor owner yang ingin dihapus: " R
-  TARGET=$(echo "$OWNERS" | jq -r ".[$((R-1))]")
+  if command -v jq >/dev/null 2>&1; then
+    TARGET=$(echo "$OWNERS" | jq -r ".[$((R-1))]" 2>/dev/null || echo "")
+  else
+    TARGET=$(echo "$OWNERS" | sed -n "$R p" | sed -E "s/^[0-9[:space:]]*//")
+  fi
 
-  if [ "$TARGET" != "null" ]; then
+  if [ -n "$TARGET" ] && [ "$TARGET" != "null" ]; then
     sed -i "/'$TARGET'/d" "$CONFIG"
     echo "Owner dihapus: $TARGET"
   else
-    echo "Pilihan tidak valid"
+    echo "Pilihan tidak valid."
   fi
 
   sleep 1
@@ -198,11 +268,10 @@ update_antirusuh() {
 
   REPO="https://raw.githubusercontent.com/daniars1121-svg/antirusuhbydanzztsuyoi/main/antirusuh.sh"
 
-  curl -s "$REPO" -o /root/antirusuh_update.sh
-
+  curl -fsSL "$REPO" -o /root/antirusuh_update.sh || { echo "Gagal mendownload update"; sleep 1; menu; }
   chmod +x /root/antirusuh_update.sh
   bash /root/antirusuh_update.sh
-  exit
+  exit 0
 }
 
 menu
