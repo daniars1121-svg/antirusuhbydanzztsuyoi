@@ -1,131 +1,180 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
 PTERO="/var/www/pterodactyl"
-KERNEL="$PTERO/app/Http/Kernel.php"
+
 ADMIN_MW="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
 CLIENT_MW="$PTERO/app/Http/Middleware/ClientLock.php"
-BACKUP_DIR="$PTERO/antirusuh_backup_$(date +%s)"
+KERNEL="$PTERO/app/Http/Kernel.php"
+API_CLIENT="$PTERO/routes/api-client.php"
 
-mkdir -p "$BACKUP_DIR"
-echo "[*] Backup kernel and routes to $BACKUP_DIR"
-cp -a "$KERNEL" "$BACKUP_DIR/" || true
-cp -a "$PTERO/routes/api-client.php" "$BACKUP_DIR/" || true
-cp -a "$PTERO/routes/admin.php" "$BACKUP_DIR/" || true
+banner(){
+    echo "======================================="
+    echo "   ANTI RUSUH UNIVERSAL v5 (STABLE)"
+    echo "======================================="
+}
 
-read -p "Masukkan ID owner utama (angka): " OWNER
-if ! [[ "$OWNER" =~ ^[0-9]+$ ]]; then echo "ID harus angka"; exit 1; fi
+install(){
+    banner
+    read -p "Masukkan ID Owner Utama: " OWNER
 
-# 1) Create middleware files if missing
-mkdir -p "$(dirname "$ADMIN_MW")"
-if [ ! -f "$ADMIN_MW" ]; then
-cat > "$ADMIN_MW" <<PHP
+    mkdir -p "$PTERO/antirusuh_backup"
+    BKP="$PTERO/antirusuh_backup/bkp_$(date +%s)"
+    mkdir "$BKP"
+
+    cp "$KERNEL" "$BKP"
+    cp "$API_CLIENT" "$BKP"
+
+    echo "→ Membuat WhitelistAdmin.php"
+cat > "$ADMIN_MW" <<EOF
 <?php
 namespace Pterodactyl\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
 
-class WhitelistAdmin
-{
-    public function handle(Request \$request, Closure \$next)
-    {
-        \$allowed = [$OWNER];
-        \$u = \$request->user();
-        if (!\$u) {
-            // not logged in -> deny protected admin paths
-            if (\$this->isProtected(\$request->path())) abort(403, 'ngapain wok');
-            return \$next(\$request);
-        }
-        if (\$this->isProtected(\$request->path()) && !in_array(\$u->id, \$allowed)) {
-            abort(403, 'ngapain wok');
-        }
-        return \$next(\$request);
-    }
+class WhitelistAdmin {
+    public function handle(Request \$req, Closure \$next) {
 
-    private function isProtected(string \$path): bool {
-        \$protect = ['admin/servers','admin/nodes','admin/databases','admin/locations','admin/mounts','admin/nests'];
+        \$allowed = [$OWNER];
+        \$u = \$req->user();
+
+        if (!\$u)
+            return abort(403, "ngapain wok");
+
+        \$protect = [
+            "admin/nodes",
+            "admin/servers",
+            "admin/databases",
+            "admin/locations",
+            "admin/mounts",
+            "admin/nests"
+        ];
+
         foreach (\$protect as \$p) {
-            if (str_starts_with(\$path, rtrim(\$p,'/'))) return true;
+            if (str_starts_with(\$req->path(), \$p)) {
+                if (!in_array(\$u->id, \$allowed))
+                    return abort(403, "ngapain wok");
+            }
         }
-        return false;
+
+        return \$next(\$req);
     }
 }
-PHP
-    echo "[+] WhitelistAdmin created."
-else
-    echo "[i] WhitelistAdmin exists, skipping create."
-fi
+EOF
 
-if [ ! -f "$CLIENT_MW" ]; then
-mkdir -p "$(dirname "$CLIENT_MW")"
-cat > "$CLIENT_MW" <<PHP
+    echo "→ Membuat ClientLock.php"
+cat > "$CLIENT_MW" <<EOF
 <?php
 namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
 
-class ClientLock
-{
-    public function handle(Request \$request, Closure \$next)
-    {
+class ClientLock {
+    public function handle(Request \$req, Closure \$next){
+
         \$allowed = [$OWNER];
-        \$u = \$request->user();
-        if (!\$u) abort(403, 'ngapain wok');
+        \$u = \$req->user();
 
-        if (in_array(\$u->id, \$allowed)) return \$next(\$request);
+        if (!\$u)
+            return abort(403, "ngapain wok");
 
-        \$server = \$request->route('server');
-        if (\$server && isset(\$server->owner_id) && \$server->owner_id != \$u->id) {
-            abort(403, 'ngapain wok');
-        }
-        return \$next(\$request);
+        if (in_array(\$u->id, \$allowed))
+            return \$next(\$req);
+
+        \$srv = \$req->route("server");
+
+        if (\$srv && \$srv->owner_id != \$u->id)
+            return abort(403, "ngapain wok");
+
+        return \$next(\$req);
     }
 }
-PHP
-echo "[+] ClientLock created."
-else
-echo "[i] ClientLock exists, skipping."
-fi
+EOF
 
-# 2) Ensure kernel has aliases inserted exactly once
-echo "[*] Registering middleware aliases in Kernel.php (safe insert)..."
+    echo "→ Memasang middleware di Kernel.php (AMANKAN)"
 
-# create a marker so we can check idempotence
-if ! grep -q "whitelistadmin' =>" "$KERNEL"; then
-    # insert before the closing of middlewareAliases array
-    awk '
-    BEGIN { inserted=0 }
-    { print }
-    /protected[[:space:]]+\$middlewareAliases[[:space:]]*=/,/\];/ {
-        if (!inserted && /\];/) {
-            print "        '\''whitelistadmin'\'' => \\Pterodactyl\\Http\\Middleware\\WhitelistAdmin::class,";
-            print "        '\''clientlock'\'' => \\App\\Http\\Middleware\\ClientLock::class,";
-            inserted=1
-        }
-    }' "$KERNEL" > "$KERNEL.tmp" && mv "$KERNEL.tmp" "$KERNEL"
-    echo "[+] aliases inserted."
-else
-    echo "[i] aliases already present in Kernel.php"
-fi
+    # Tambah alias jika belum ada
+    if ! grep -q "whitelistadmin" "$KERNEL"; then
+        sed -i "/protected \\$middlewareAliases = \\[/ a\        'whitelistadmin' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," "$KERNEL"
+    fi
 
-# 3) ensure autoload and caches refreshed
-if command -v composer >/dev/null 2>&1; then
-    (cd "$PTERO" && composer dump-autoload -o) || true
-fi
-(cd "$PTERO" && php artisan config:clear || true; php artisan cache:clear || true; php artisan route:clear || true)
+    if ! grep -q "clientlock" "$KERNEL"; then
+        sed -i "/protected \\$middlewareAliases = \\[/ a\        'clientlock' => \\\\App\\\\Http\\\\Middleware\\\\ClientLock::class," "$KERNEL"
+    fi
 
-# 4) restart queue/process (best-effort)
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl restart pteroq || true
-fi
+    echo "→ Memasang clientlock ke api-client"
+    if ! grep -q "clientlock" "$API_CLIENT"; then
+        sed -i "s/AuthenticateServerAccess::class,/AuthenticateServerAccess::class, 'clientlock',/g" "$API_CLIENT"
+    fi
 
-echo "================================"
-echo "Done. Sekarang cek:"
-echo " - File middleware ada:"
-echo "   ls -l $ADMIN_MW $CLIENT_MW"
-echo " - Kernel lines:"
-echo "   grep -n \"whitelistadmin' =>\" $KERNEL || true"
-echo " - Tes akses: coba login user non-owner lalu akses /admin/nodes"
-echo "================================"
+    echo "→ Clear cache"
+    cd "$PTERO"
+    php artisan route:clear
+    php artisan cache:clear
+    php artisan config:clear
+    systemctl restart pteroq 2>/dev/null
+
+    echo "======================================="
+    echo " ANTI RUSUH v5 TERPASANG DENGAN SUKSES!"
+    echo "======================================="
+}
+
+add_owner(){
+    read -p "ID Owner baru: " ID
+    sed -i "s/\[\(.*\)\]/[\1,$ID]/" "$ADMIN_MW"
+    sed -i "s/\[\(.*\)\]/[\1,$ID]/" "$CLIENT_MW"
+    php "$PTERO/artisan" route:clear
+    echo "Owner ditambahkan!"
+}
+
+del_owner(){
+    read -p "ID Owner yang dihapus: " ID
+    sed -i "s/\b$ID\b//g" "$ADMIN_MW"
+    sed -i "s/\b$ID\b//g" "$CLIENT_MW"
+    sed -i "s/,,/,/g" "$ADMIN_MW"
+    sed -i "s/,,/,/g" "$CLIENT_MW"
+    php "$PTERO/artisan" route:clear
+    echo "Owner dihapus!"
+}
+
+uninstall(){
+    echo "→ Menghapus middleware"
+    rm -f "$ADMIN_MW" "$CLIENT_MW"
+
+    echo "→ Menghapus dari Kernel"
+    sed -i "/whitelistadmin/d" "$KERNEL"
+    sed -i "/clientlock/d" "$KERNEL"
+
+    echo "→ Membersihkan api-client"
+    sed -i "s/'clientlock',//g" "$API_CLIENT"
+
+    cd "$PTERO"
+    php artisan cache:clear
+    php artisan route:clear
+    php artisan config:clear
+    systemctl restart pteroq 2>/dev/null
+    echo "AntiRusuh berhasil dihapus!"
+}
+
+menu(){
+while true; do
+    banner
+    echo "1) Install Anti-Rusuh"
+    echo "2) Tambah Owner"
+    echo "3) Hapus Owner"
+    echo "4) Uninstall"
+    echo "5) Exit"
+    read -p "Pilih: " x
+
+    case $x in
+        1) install ;;
+        2) add_owner ;;
+        3) del_owner ;;
+        4) uninstall ;;
+        5) exit ;;
+    esac
+done
+}
+
+menu
