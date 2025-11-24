@@ -258,7 +258,7 @@ uninstall() {
 
 usage() {
   cat <<'U'
-AntiRusuh installer - menu
+AntiRusuh installer danz tau
 1) Install
 2) Add owner
 3) Delete owner
