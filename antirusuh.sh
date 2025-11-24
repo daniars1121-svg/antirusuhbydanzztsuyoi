@@ -157,7 +157,7 @@ uninstall_restore() {
 }
 
 show_menu() {
-    echo "1) Install"
+    echo "1) Install hgg"
     echo "2) Add owner"
     echo "3) Delete owner"
     echo "4) Uninstall"
