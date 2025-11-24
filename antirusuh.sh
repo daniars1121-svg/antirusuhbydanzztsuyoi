@@ -1,286 +1,226 @@
 #!/usr/bin/env bash
-# antirusuh.sh — robust universal installer for Pterodactyl AntiRusuh
 set -euo pipefail
 
-PTERO="${PTERO:-/var/www/pterodactyl}"
+PTERO="/var/www/pterodactyl"
 BACKUP_DIR="$PTERO/antirusuh_backup_$(date +%s)"
-KERNEL="$PTERO/app/Http/Kernel.php"
 ADMIN_MW="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
 CLIENT_MW="$PTERO/app/Http/Middleware/ClientLock.php"
-API_CLIENT="$PTERO/routes/api-client.php"
+KERNEL="$PTERO/app/Http/Kernel.php"
 ADMIN_ROUTES="$PTERO/routes/admin.php"
+API_CLIENT="$PTERO/routes/api-client.php"
+API_APP="$PTERO/routes/api-application.php"
+ERROR_VIEW_DIR="$PTERO/resources/views/errors"
+ERROR_VIEW_FILE="$ERROR_VIEW_DIR/antirusuh.blade.php"
+SERVERCTLDIR="$PTERO/app/Http/Controllers/Admin/Servers"
 USERCTL="$PTERO/app/Http/Controllers/Admin/UserController.php"
-SERVERCTL_DIR="$PTERO/app/Http/Controllers/Admin/Servers"
 
-mkdir -p "$BACKUP_DIR"
-
-backup() {
-  local f="$1"
-  if [ -f "$f" ]; then
-    cp -a "$f" "$BACKUP_DIR/$(basename "$f").bak" || true
-  fi
+ensure_root() {
+    if [ "$(id -u)" -ne 0 ]; then exit 1; fi
 }
 
-backup_all() {
-  backup "$KERNEL"
-  backup "$API_CLIENT"
-  backup "$ADMIN_ROUTES"
-  backup "$USERCTL"
-  if [ -d "$SERVERCTL_DIR" ]; then
-    for f in "$SERVERCTL_DIR"/*.php; do backup "$f"; done
-  fi
+backup_files() {
+    mkdir -p "$BACKUP_DIR"
+    cp -a "$KERNEL" "$BACKUP_DIR/" 2>/dev/null || true
+    mkdir -p "$BACKUP_DIR/appMiddleware"
+    cp -a "$PTERO/app/Http/Middleware" "$BACKUP_DIR/appMiddleware/" 2>/dev/null || true
+    cp -a "$ADMIN_ROUTES" "$BACKUP_DIR/" 2>/dev/null || true
+    cp -a "$API_CLIENT" "$BACKUP_DIR/" 2>/dev/null || true
+    cp -a "$API_APP" "$BACKUP_DIR/" 2>/dev/null || true
+    mkdir -p "$BACKUP_DIR/routes"
+    cp -a "$PTERO/routes" "$BACKUP_DIR/routes/" 2>/dev/null || true
+    cp -a "$PTERO/resources/views/errors" "$BACKUP_DIR/errors_backup" 2>/dev/null || true
 }
 
-echo_banner() {
-  cat <<'B'
-==========================================
-        ANTI RUSUH INSTALLER (UNIVERSAL)
-==========================================
-B
-}
+install_middleware_files() {
+    mkdir -p "$(dirname "$ADMIN_MW")"
+    mkdir -p "$(dirname "$CLIENT_MW")"
 
-# safe-insert alias into Kernel (only if not present)
-kernel_add_alias() {
-  local key="$1" class="$2"
-  if [ ! -f "$KERNEL" ]; then
-    echo "Kernel file not found: $KERNEL"
-    return 1
-  fi
-  if grep -qF "$key" "$KERNEL"; then
-    return 0
-  fi
-  # insert after the line that begins "protected $middlewareAliases = ["
-  perl -0777 -i -pe "s/(protected\\s+\\\$middlewareAliases\\s*=\\s*\\[\\s*)/\$1\n        '$key' => $class,\n/s" "$KERNEL"
-}
-
-# add clientlock middleware to api-client route group(s) that have /servers prefix
-api_client_add_clientlock() {
-  [ -f "$API_CLIENT" ] || return 0
-  # Add middleware to group headers that contain prefix => '/servers' or '/servers/{server}'
-  # but only if that header doesn't already contain 'clientlock' or a 'middleware' key.
-  perl -0777 -i -pe '
-    s/(\[\s*(["](?:\\.|[^"\\])*["]|[\x27](?:\\.|[^'"'"'\\])*[\x27])\s*=>\s*([\"\x27])\/servers(?:\/\{server\})?\3\s*)(?![^]]*middleware)([^]]*?)(\])/ $1 . ", '\''middleware'\'' => [ '\''clientlock'\'' ]" . $4 . "]" /ges
-  ' "$API_CLIENT" 2>/dev/null || true
-
-  # Also handle patterns where prefix is on same line like "'prefix' => '/servers', 'as' => ..."
-  perl -0777 -i -pe '
-    s/((["'\''"])prefix\2\s*=>\s*([\"\x27])\/servers(?:\/\{server\})?\3\s*,\s*)(?=(?:[^]]*\]))(?![^]]*middleware)/ $1 . "\x27middleware\x27 => [\x27clientlock\x27], " /ges
-  ' "$API_CLIENT" 2>/dev/null || true
-}
-
-# add whitelistadmin to admin route group headers for common prefixes (only if missing)
-admin_add_whitelist() {
-  [ -f "$ADMIN_ROUTES" ] || return 0
-  prefixes=(servers nodes databases users mounts locations)
-  for p in "${prefixes[@]}"; do
-    # if prefix exists and group header does not contain middleware, add middleware entry
-    perl -0777 -i -pe '
-      $p = shift;
-      s/(\[\s*(["'\'']?)prefix\2\s*=>\s*([\"\x27])' . $p . '\3\s*)(?![^]]*middleware)([^]]*?)(\])/ $1 . ", '\''middleware'\'' => [ '\''whitelistadmin'\'' ]" . $4 . "]" /ges
-    ' "$p" "$ADMIN_ROUTES" 2>/dev/null || true
-  done
-  # cleanup possible double-commas left behind by earlier modifications
-  perl -0777 -i -pe 's/,\s*,/,/g; s/\[\s*,/[/g; s/,(\s*[\]\}])/ $1/g;' "$ADMIN_ROUTES" 2>/dev/null || true
-}
-
-# safely insert protection into delete functions in controllers
-protect_delete_insert() {
-  local file="$1"
-  [ -f "$file" ] || return 0
-  # insert check right after opening brace of public function delete(...) {
-  perl -0777 -i -pe '
-    s/(public\s+function\s+delete\s*\(.*?\)\s*\{)/$1\n        // ANTI_RUSUH_PROTECT\n        $allowed = ['"$OWNER"']; if (! auth()->user() || ! in_array(auth()->user()->id, $allowed)) abort(403, "ngapain wok");/g;
-  ' "$file" 2>/dev/null || true
-}
-
-# cleanup routes to avoid empty array elements / double-commas
-cleanup_routes() {
-  for f in "$@"; do
-    [ -f "$f" ] || continue
-    # remove stray ,, and fix [, ] patterns
-    perl -0777 -i -pe 's/,\s*,/,/g; s/\[\s*,/[/g; s/,\s*\]/]/g; s/\{\s*,/\{/g;' "$f" 2>/dev/null || true
-  done
-}
-
-install() {
-  echo_banner
-  read -p "Masukkan ID Owner utama (angka): " OWNER
-  if ! [[ "$OWNER" =~ ^[0-9]+$ ]]; then
-    echo "Owner ID harus angka"; return 1
-  fi
-
-  echo "Backup files to $BACKUP_DIR"
-  mkdir -p "$BACKUP_DIR"
-  backup_all
-
-  mkdir -p "$(dirname "$ADMIN_MW")"
-
-  cat > "$ADMIN_MW" <<EOF
+cat > "$ADMIN_MW" <<'PHP'
 <?php
-
 namespace Pterodactyl\Http\Middleware;
+use Closure; use Illuminate\Http\Request;
+class WhitelistAdmin {
+public function handle(Request $r, Closure $n) {
+$a = property_exists($this,'allowed') ? $this->allowed : [];
+$u = $r->user(); if(!$u || !in_array($u->id,$a)) {
+if(view()->exists('errors.antirusuh')) return response()->view('errors.antirusuh',['message'=>'ngapain wok'],403);
+if($r->wantsJson()) return response()->json(['error'=>'ngapain wok'],403);
+abort(403);
+} return $n($r);
+}}
+PHP
 
-use Closure;
-use Illuminate\Http\Request;
-
-class WhitelistAdmin
-{
-    public function handle(Request \$request, Closure \$next)
-    {
-        \$allowed = [$OWNER];
-        if (! \$request->user() || ! in_array(\$request->user()->id, \$allowed)) {
-            abort(403, "ngapain wok");
-        }
-        return \$next(\$request);
-    }
-}
-EOF
-
-  cat > "$CLIENT_MW" <<'EOF'
+cat > "$CLIENT_MW" <<'PHP'
 <?php
-
 namespace App\Http\Middleware;
-
-use Closure;
-use Illuminate\Http\Request;
-
-class ClientLock
-{
-    public function handle(Request $request, Closure $next)
-    {
-        $allowed = [__OWNER__];
-        $u = $request->user();
-        if (! $u) abort(403, "ngapain wok");
-        if (in_array($u->id, $allowed)) return $next($request);
-
-        $server = $request->route("server");
-        if ($server) {
-            $ownerId = $server->owner_id ?? ($server->user_id ?? null);
-            if ($ownerId === null || $ownerId != $u->id) abort(403, "ngapain wok");
-        } else {
-            # fallback: block direct /api/client/servers calls if no route param
-            $uri = $request->getRequestUri();
-            if (strpos($uri, "/api/client/servers") !== false) abort(403, "ngapain wok");
-        }
-
-        return $next($request);
-    }
+use Closure; use Illuminate\Http\Request;
+class ClientLock {
+public function handle(Request $r, Closure $n) {
+$a = property_exists($this,'allowed') ? $this->allowed : [];
+$u = $r->user(); if(!$u) {
+if($r->wantsJson()) return response()->json(['error'=>'ngapain wok'],403);
+abort(403);
 }
-EOF
-  # replace owner placeholder
-  sed -i "s/__OWNER__/$OWNER/" "$CLIENT_MW"
+if(in_array($u->id,$a)) return $n($r);
+$s = $r->route('server');
+if($s && isset($s->owner_id) && $s->owner_id != $u->id) {
+if(view()->exists('errors.antirusuh')) return response()->view('errors.antirusuh',['message'=>'ngapain wok'],403);
+if($r->wantsJson()) return response()->json(['error'=>'ngapain wok'],403);
+abort(403);
+}
+return $n($r);
+}}
+PHP
+}
 
-  # register aliases into kernel safely
-  kernel_add_alias "clientlock" "\\\\App\\\\Http\\\\Middleware\\\\ClientLock::class"
-  kernel_add_alias "whitelistadmin" "\\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class"
+inject_allowed_ids() {
+    local ids="$1"
+    if grep -q "protected \$allowed" "$ADMIN_MW"; then
+        perl -0777 -pe "s/protected \\\$allowed\s*=\s*\[.*?\];/protected \\\$allowed = [$ids];/s" -i "$ADMIN_MW"
+    else
+        perl -0777 -pe "s/class WhitelistAdmin\s*\{\/?n?/class WhitelistAdmin {\n    protected \\\$allowed = [$ids];\n/s" -i "$ADMIN_MW"
+    fi
+    if grep -q "protected \$allowed" "$CLIENT_MW"; then
+        perl -0777 -pe "s/protected \\\$allowed\s*=\s*\[.*?\];/protected \\\$allowed = [$ids];/s" -i "$CLIENT_MW"
+    else
+        perl -0777 -pe "s/class ClientLock\s*\{\/?n?/class ClientLock {\n    protected \\\$allowed = [$ids];\n/s" -i "$CLIENT_MW"
+    fi
+}
 
-  # patch api-client routes robustly
-  api_client_add_clientlock
+register_kernel_aliases() {
+    if ! grep -q "whitelistadmin" "$KERNEL"; then
+        perl -0777 -pe '
+            if (m/protected\s+\$middlewareAliases\s*=\s*\[(.*?)\];/s) {
+                $inner = $1;
+                $add = "\n        \x27whitelistadmin\x27 => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class,\n        \x27clientlock\x27 => \\\\App\\\\Http\\\\Middleware\\\\ClientLock::class,\n";
+                s/protected\s+\$middlewareAliases\s*=\s*\[(.*?)\];/protected \$middlewareAliases = [$inner$add    ];/s;
+            }
+        ' -i "$KERNEL"
+    fi
+}
 
-  # patch admin routes to add whitelist admin where applicable
-  admin_add_whitelist
+wrap_admin_routes_global() {
+    if ! grep -q "whitelistadmin" "$ADMIN_ROUTES"; then
+        perl -0777 -pe '
+        if (!m/Route::middleware\(\[.*?whitelistadmin.*?\]\)->group/s) {
+            if (m/(.*?)(Route::get\(|Route::group\(|Route::prefix\(|Route::middleware\()/s) {
+                $pre=$1; $rest=substr($_,length($pre));
+                $_=$pre."Route::middleware([\'whitelistadmin\'])->group(function () {\n".$rest."\n});\n";
+            }
+        }' -i "$ADMIN_ROUTES"
+    fi
+}
 
-  # insert protect-delete into controllers
-  protect_delete_insert "$USERCTL"
-  if [ -d "$SERVERCTL_DIR" ]; then
-    for f in "$SERVERCTL_DIR"/*.php; do protect_delete_insert "$f"; done
-  fi
+add_clientlock_to_api_client() {
+    perl -0777 -i -pe '
+    s/(\bprefix\'\s*=>\s*'\''\/servers\/\{server\}'\''\s*,\s*\'middleware\'\s*=>\s*\[)(\s*(?:[^\]]*?))/$1.(index($2,"\'clientlock\'")==-1?"\'clientlock\', ":"").$2/ge;
+    ' "$API_CLIENT"
+}
 
-  # cleanup route files to ensure no stray commas
-  cleanup_routes "$API_CLIENT" "$ADMIN_ROUTES"
+protect_delete_methods() {
+    if [ -f "$USERCTL" ]; then
+        if ! grep -q "ngapain wok" "$USERCTL"; then
+            perl -0777 -i -pe '
+            s/(public\s+function\s+delete\s*\([^\)]*\)\s*\{)/$1\n        \$a=(isset(\$this->allowed)?\$this->allowed:[]); if(!in_array(auth()->user()->id,\$a)){ if(request()->wantsJson()){return response()->json(["error"=>"ngapain wok"],403);} if(view()->exists("errors.antirusuh")){return response()->view("errors.antirusuh",["message"=>"ngapain wok"],403);} abort(403);} /s;
+            ' "$USERCTL"
+        fi
+    fi
+    if [ -d "$SERVERCTLDIR" ]; then
+        for f in "$SERVERCTLDIR"/*.php; do
+            if ! grep -q "ngapain wok" "$f"; then
+                perl -0777 -i -pe '
+                s/(public\s+function\s+delete\s*\([^\)]*\)\s*\{)/$1\n        \$a=(isset(\$this->allowed)?\$this->allowed:[]); if(!in_array(auth()->user()->id,\$a)){ if(request()->wantsJson()){return response()->json(["error"=>"ngapain wok"],403);} if(view()->exists("errors.antirusuh")){return response()->view("errors.antirusuh",["message"=>"ngapain wok"],403);} abort(403);} /s;
+                ' "$f"
+            fi
+        done
+    fi
+}
 
-  # refresh laravel caches
-  if [ -d "$PTERO" ]; then
+create_error_view() {
+    mkdir -p "$ERROR_VIEW_DIR"
+cat > "$ERROR_VIEW_FILE" <<'HTML'
+<!doctype html><html><head><meta charset=utf-8><title>Akses Ditolak</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+body{background:#141A20;color:#E6EEF3;text-align:center;font-family:sans-serif}
+.box{margin:10% auto;max-width:720px}
+h1{color:#F85A3E}
+</style></head><body>
+<div class=box><h1>Access Denied</h1><p>{{ $message ?? 'ngapain wok' }}</p></div>
+</body></html>
+HTML
+}
+
+refresh_artisan() {
     cd "$PTERO"
     php artisan route:clear || true
     php artisan config:clear || true
     php artisan cache:clear || true
     php artisan view:clear || true
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl restart pteroq || true
-    fi
-  fi
-
-  echo "Install selesai. Owner: $OWNER"
-  echo "Backups disimpan di: $BACKUP_DIR"
+    systemctl restart pteroq || true
 }
 
-add_owner() {
-  read -p "Masukkan ID Owner baru: " NEW
-  if ! [[ "$NEW" =~ ^[0-9]+$ ]]; then echo "ID harus angka"; return 1; fi
-  # add if not present
-  if [ -f "$ADMIN_MW" ] && ! grep -q "\b$NEW\b" "$ADMIN_MW"; then
-    perl -0777 -i -pe "s/\\[(.*?)\\]/'[' . \$1 . ',' . '$NEW' . ']' /es" "$ADMIN_MW" || true
-  fi
-  if [ -f "$CLIENT_MW" ] && ! grep -q "\b$NEW\b" "$CLIENT_MW"; then
-    perl -0777 -i -pe "s/\\[(.*?)\\]/'[' . \$1 . ',' . '$NEW' . ']' /es" "$CLIENT_MW" || true
-  fi
-  cd "$PTERO" && php artisan route:clear >/dev/null 2>&1 || true
-  echo "Owner $NEW ditambahkan."
+uninstall_restore() {
+    latest=$(ls -dt "$PTERO"/antirusuh_backup_* 2>/dev/null | head -n1 || true)
+    [ -z "$latest" ] && exit 1
+    cp -a "$latest/Kernel.php" "$KERNEL" 2>/dev/null || true
+    cp -a "$latest/appMiddleware/Middleware" "$PTERO/app/Http/" 2>/dev/null || true
+    cp -a "$latest/routes/admin.php" "$ADMIN_ROUTES" 2>/dev/null || true
+    cp -a "$latest/routes/api-client.php" "$API_CLIENT" 2>/dev/null || true
+    cp -a "$latest/routes/api-application.php" "$API_APP" 2>/dev/null || true
+    cp -a "$latest/errors_backup"/* "$PTERO/resources/views/errors/" 2>/dev/null || true
+    rm -f "$ADMIN_MW" "$CLIENT_MW" "$ERROR_VIEW_FILE"
+    refresh_artisan
 }
 
-del_owner() {
-  read -p "Masukkan ID Owner yang ingin dihapus: " DEL
-  if ! [[ "$DEL" =~ ^[0-9]+$ ]]; then echo "ID harus angka"; return 1; fi
-  if [ -f "$ADMIN_MW" ]; then
-    perl -0777 -i -pe "s/\\b$DEL\\b//g; s/,\\s*,/,/g; s/\\[\\s*,/[/g; s/,\\s*\\]/]/g;" "$ADMIN_MW" || true
-  fi
-  if [ -f "$CLIENT_MW" ]; then
-    perl -0777 -i -pe "s/\\b$DEL\\b//g; s/,\\s*,/,/g; s/\\[\\s*,/[/g; s/,\\s*\\]/]/g;" "$CLIENT_MW" || true
-  fi
-  cd "$PTERO" && php artisan route:clear >/dev/null 2>&1 || true
-  echo "Owner $DEL dihapus."
+show_menu() {
+    echo "1) Install danz tsu"
+    echo "2) Add owner"
+    echo "3) Delete owner"
+    echo "4) Uninstall"
+    echo "5) Exit"
 }
 
-uninstall() {
-  read -p "Yakin uninstall AntiRusuh? (y/N): " C
-  if [[ "$C" != "y" && "$C" != "Y" ]]; then echo "Batal."; return 0; fi
-
-  rm -f "$ADMIN_MW" "$CLIENT_MW" || true
-  # remove aliases from kernel
-  if [ -f "$KERNEL" ]; then
-    perl -0777 -i -pe "s/\\s*'clientlock'\\s*=>\\s*[^,\\n]+,?\\n//g; s/\\s*'whitelistadmin'\\s*=>\\s*[^,\\n]+,?\\n//g;" "$KERNEL" || true
-  fi
-  # remove middleware arrays in routes safely (best-effort)
-  for f in "$ADMIN_ROUTES" "$API_CLIENT"; do
-    if [ -f "$f" ]; then
-      perl -0777 -i -pe "s/,?\\s*'middleware'\\s*=>\\s*\\[[^\\]]*\\]\\s*,?//g; s/,\\s*,/,/g; s/\\[\\s*,/[/g; s/,\\s*\\]/]/g;" "$f" || true
-    fi
-  done
-
-  cd "$PTERO"
-  php artisan route:clear >/dev/null 2>&1 || true
-  php artisan cache:clear >/dev/null 2>&1 || true
-  if command -v systemctl >/dev/null 2>&1; then systemctl restart pteroq || true; fi
-
-  echo "Uninstall selesai."
+add_owner_id() {
+    read -p "ID: " NEWID
+    for f in "$ADMIN_MW" "$CLIENT_MW"; do
+        [ -f "$f" ] && perl -0777 -i -pe "s/protected \\\$allowed\s*=\s*\[(.*?)\];/protected \\\$allowed = [\1,$NEWID];/s" "$f"
+    done
+    refresh_artisan
 }
 
-usage() {
-  cat <<'U'
-AntiRusuh installer danz tau
-1) Install
-2) Add owner
-3) Delete owner
-4) Uninstall
-5) Exit
-U
+remove_owner_id() {
+    read -p "ID: " DELID
+    for f in "$ADMIN_MW" "$CLIENT_MW"; do
+        [ -f "$f" ] && perl -0777 -i -pe "s/\b$DELID\b//g; s/,,/,/g; s/\[,\[/[/g" "$f"
+    done
+    refresh_artisan
 }
 
-main() {
-  while true; do
-    echo_banner
-    usage
-    read -p "Pilih: " CH
-    case "$CH" in
-      1) install ;;
-      2) add_owner ;;
-      3) del_owner ;;
-      4) uninstall ;;
-      5) exit 0 ;;
-      *) echo "Pilihan tidak valid." ;;
+main_install() {
+    backup_files
+    read -p "Owner ID(s): " OWNER_IDS
+    OWNER_IDS=$(echo "$OWNER_IDS" | sed -E 's/[^0-9,]//g')
+    install_middleware_files
+    inject_allowed_ids "$OWNER_IDS"
+    register_kernel_aliases
+    wrap_admin_routes_global
+    add_clientlock_to_api_client
+    protect_delete_methods
+    create_error_view
+    refresh_artisan
+}
+
+ensure_root
+
+while true; do
+    show_menu
+    read -p "Pilih: " x
+    case "$x" in
+        1) main_install ;;
+        2) add_owner_id ;;
+        3) remove_owner_id ;;
+        4) uninstall_restore ;;
+        5) exit 0 ;;
     esac
-  done
-}
-
-main
+done
