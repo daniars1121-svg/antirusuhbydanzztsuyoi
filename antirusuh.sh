@@ -138,7 +138,7 @@ uninstall_antirusuh() {
 menu() {
 while true; do
     banner
-    echo "1) Install AntiRusuh"
+    echo "1) Install AntiRusuh rek"
     echo "2) Tambah Owner"
     echo "3) Hapus Owner"
     echo "4) Uninstall"
