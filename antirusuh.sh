@@ -1,76 +1,47 @@
 #!/usr/bin/env bash
-# AntiRusuh FINAL installer (safe, with backups + rollback)
-# Save as antirusuh-final.sh and run with bash.
+set -euo pipefail
 
 PTERO="/var/www/pterodactyl"
 KERNEL="$PTERO/app/Http/Kernel.php"
 API_CLIENT="$PTERO/routes/api-client.php"
 ADMIN_MW="$PTERO/app/Http/Middleware/WhitelistAdmin.php"
 CLIENT_MW="$PTERO/app/Http/Middleware/ClientLock.php"
-BACKUP_DIR_ROOT="$PTERO/antirusuh_backups"
-
-mkdir -p "$BACKUP_DIR_ROOT"
+BACKUP_DIR="$PTERO/antirusuh_backups"
 
 banner(){
     cat <<'EOF'
-===========================================
-        ANTI RUSUH FINAL - INSTALLER
-         Safe universal for Pterodactyl
-===========================================
+==========================================
+     ANTI RUSUH FINAL (Universal Safe)
+==========================================
 EOF
 }
 
-php_check() {
-    if ! command -v php >/dev/null 2>&1; then
-        echo "php CLI not found. Install php-cli to continue."
-        return 1
+backup_file(){
+    mkdir -p "$BACKUP_DIR"
+    local f="$1"
+    if [ -f "$f" ]; then
+        local t="$BACKUP_DIR/$(basename "$f").bak.$(date +%s)"
+        cp -a "$f" "$t"
+        echo "Backup: $f -> $t"
     fi
-    return 0
-}
-
-backup_files(){
-    local tag ts dest
-    ts=$(date +%s)
-    tag="$1"
-    dest="$BACKUP_DIR_ROOT/${tag}_$ts"
-    mkdir -p "$dest"
-    echo "→ Backup to $dest"
-    cp -a "$KERNEL" "$dest/" 2>/dev/null || true
-    cp -a "$API_CLIENT" "$dest/" 2>/dev/null || true
-    cp -a "$ADMIN_MW" "$dest/" 2>/dev/null || true
-    cp -a "$CLIENT_MW" "$dest/" 2>/dev/null || true
-    echo "$dest"
-}
-
-rollback_if_bad(){
-    local dest="$1"
-    local reason="$2"
-    echo "ERROR: $reason"
-    echo "Rolling back from backup: $dest"
-    cp -a "$dest/Kernel.php" "$KERNEL" 2>/dev/null || true
-    cp -a "$dest/$(basename "$API_CLIENT")" "$API_CLIENT" 2>/dev/null || true
-    cp -a "$dest/$(basename "$ADMIN_MW")" "$ADMIN_MW" 2>/dev/null || true
-    cp -a "$dest/$(basename "$CLIENT_MW")" "$CLIENT_MW" 2>/dev/null || true
-    echo "Rollback complete. Please check web/logs and re-run the installer after fixing issues."
-    exit 1
 }
 
 install(){
     banner
-    php_check || exit 1
-
     read -p "Masukkan ID Owner Utama (angka): " OWNER
     if ! [[ "$OWNER" =~ ^[0-9]+$ ]]; then
-        echo "ID harus angka. Batal."
+        echo "ID harus angka." >&2
         exit 1
     fi
 
-    BACKUP_DIR=$(backup_files "preinstall")
-    echo "→ Membuat middleware files..."
+    echo "[*] Membuat backup penting..."
+    backup_file "$KERNEL"
+    backup_file "$API_CLIENT"
+    backup_file "$ADMIN_MW"
+    backup_file "$CLIENT_MW"
 
+    echo "[*] Membuat WhitelistAdmin middleware: $ADMIN_MW"
     mkdir -p "$(dirname "$ADMIN_MW")"
-    mkdir -p "$(dirname "$CLIENT_MW")"
-
     cat > "$ADMIN_MW" <<EOF
 <?php
 namespace Pterodactyl\Http\Middleware;
@@ -80,36 +51,34 @@ use Illuminate\Http\Request;
 
 class WhitelistAdmin
 {
-    /**
-     * Protect some admin routes by whitelist of admin IDs.
-     * Uses request path checking so we don't need to touch admin.php.
-     */
     public function handle(Request \$request, Closure \$next)
     {
-        // Allowed admin user IDs (installer fills this)
-        \$allowed = [${OWNER}];
+        // Owner list - injected by installer (string concatenation)
+        \$allowed = [$OWNER];
 
-        // If no authenticated user, abort
+        // Jika tidak login, lanjutkan (bukan tugas middleware ini)
         \$u = \$request->user();
         if (!\$u) {
-            abort(403, 'ngapain wok');
+            return \$next(\$request);
         }
 
-        // paths to protect (prefixes). Keep them without leading slash.
-        \$protectedPrefixes = [
+        // Hanya cek path yang dimulai dengan admin/... untuk daftar blocked berikut.
+        \$blockedPrefixes = [
             'admin/nodes',
             'admin/locations',
             'admin/mounts',
-            'admin/databases',
             'admin/nests',
-            'admin/servers',
+            'admin/databases',
+            'admin/servers'
         ];
 
         \$path = ltrim(\$request->path(), '/');
 
-        foreach (\$protectedPrefixes as \$p) {
-            if (str_starts_with(\$path, \$p)) {
-                if (!in_array(\$u->id, \$allowed)) {
+        foreach (\$blockedPrefixes as \$p) {
+            // gunakan strpos untuk kompatibilitas PHP7/8
+            if (strpos(\$path, \$p) === 0) {
+                // jika bukan owner dan bukan root_admin -> abort
+                if (!in_array(\$u->id, \$allowed) && empty(\$u->root_admin)) {
                     abort(403, 'ngapain wok');
                 }
             }
@@ -120,6 +89,8 @@ class WhitelistAdmin
 }
 EOF
 
+    echo "[*] Membuat ClientLock middleware: $CLIENT_MW"
+    mkdir -p "$(dirname "$CLIENT_MW")"
     cat > "$CLIENT_MW" <<EOF
 <?php
 namespace App\Http\Middleware;
@@ -129,24 +100,29 @@ use Illuminate\Http\Request;
 
 class ClientLock
 {
-    /**
-     * Restrict client API servers/{server} actions to server owner (unless owner is in allowed list).
-     */
     public function handle(Request \$request, Closure \$next)
     {
-        \$allowed = [${OWNER}];
+        \$allowed = [$OWNER];
         \$u = \$request->user();
+
         if (!\$u) {
+            // jika tidak login, blokir akses API client
             abort(403, 'ngapain wok');
         }
 
-        // allowed owner bypass
-        if (in_array(\$u->id, \$allowed)) {
+        // jika owner utama atau root admin -> izinkan
+        if (in_array(\$u->id, \$allowed) || (!empty(\$u->root_admin) && \$u->root_admin)) {
             return \$next(\$request);
         }
 
-        // get server route binding (if present)
-        \$server = \$request->route('server');
+        // jika route terkait server, pastikan owner server sama
+        \$server = null;
+        try {
+            \$server = \$request->route()->parameter('server');
+        } catch (\\Exception \$e) {
+            // ignore
+        }
+
         if (\$server && property_exists(\$server, 'owner_id') && \$server->owner_id != \$u->id) {
             abort(403, 'ngapain wok');
         }
@@ -156,122 +132,133 @@ class ClientLock
 }
 EOF
 
-    echo "→ Register middleware aliases in Kernel.php (safe insertion)..."
+    echo "[*] Menambahkan alias middleware ke Kernel (jika belum ada): $KERNEL"
 
-    # Use perl to insert aliases inside the middlewareAliases array only if missing
     if ! grep -q "whitelistadmin" "$KERNEL"; then
-        perl -0777 -pe '
-            if (s/(protected\s+\$middlewareAliases\s*=\s*\[)(.*?)(\n\s*\];)/$1$2
-        '\''whitelistadmin'\'' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class,
-        '\''clientlock'\'' => \\\\App\\\\Http\\\\Middleware\\\\ClientLock::class,
-$3/s) {
-                print STDERR "Inserted aliases\n";
-            }
-            ' -i "$KERNEL"
+        # tambahkan alias entries
+        sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," "$KERNEL"
+        echo "  -> whitelistadmin ditambahkan."
     else
-        echo "→ Kernel already contains whitelistadmin/clientlock aliases (skipping insert)."
+        echo "  -> whitelistadmin sudah ada."
     fi
 
-    # After editing kernel, check PHP syntax
-    php -l "$KERNEL" >/dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        rollback_if_bad "$BACKUP_DIR" "Kernel.php syntax error after modification."
+    if ! grep -q "clientlock" "$KERNEL"; then
+        sed -i "/protected \$middlewareAliases = \[/a\        'clientlock' => \\\\App\\\\Http\\\\Middleware\\\\ClientLock::class," "$KERNEL"
+        echo "  -> clientlock ditambahkan."
+    else
+        echo "  -> clientlock sudah ada."
     fi
 
-    # Add WhitelistAdmin to web middleware group if not exists.
+    # Masukkan WhitelistAdmin ke web group — hanya jika belum ada.
     if ! grep -q "WhitelistAdmin::class" "$KERNEL"; then
-        # Insert entry into 'web' group after the opening of that array in a best-effort way.
-        perl -0777 -pe '
-            if (s/(\x27web\x27\s*=>\s*\[\s*)(.*?)(\n\s*\],)/$1$2
-            \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class,
-$3/s) {
-                print STDERR "Inserted WhitelistAdmin into web group\n";
-            }
-            ' -i "$KERNEL"
-    fi
-
-    php -l "$KERNEL" >/dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        rollback_if_bad "$BACKUP_DIR" "Kernel.php syntax error after adding to web group."
-    fi
-
-    echo "→ Patching api-client routes to attach clientlock middleware (if applicable)..."
-    if [ -f "$API_CLIENT" ]; then
-        # If AuthenticateServerAccess::class is present in servers group, add clientlock after it (only once).
-        if grep -q "AuthenticateServerAccess::class" "$API_CLIENT" && ! grep -q "clientlock" "$API_CLIENT"; then
-            sed -i "s/AuthenticateServerAccess::class/AuthenticateServerAccess::class, 'clientlock'/g" "$API_CLIENT"
-        fi
-        php -l "$API_CLIENT" >/dev/null 2>&1 || rollback_if_bad "$BACKUP_DIR" "api-client.php syntax error after edit."
+        sed -i "/'web' => \[/a\            \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," "$KERNEL"
+        echo "  -> WhitelistAdmin ditambahkan ke web group."
     else
-        echo "→ Warning: $API_CLIENT not found — skipping."
+        echo "  -> WhitelistAdmin sudah berada di web group."
     fi
 
-    echo "→ Clearing Laravel caches (route/config/cache)..."
-    cd "$PTERO" || true
-    php artisan route:clear 2>/dev/null || true
-    php artisan config:clear 2>/dev/null || true
-    php artisan cache:clear 2>/dev/null || true
+    # Sisipkan clientlock ke api-client group /servers/{server} di routes/api-client.php
+    if [ -f "$API_CLIENT" ]; then
+        if ! grep -q "ClientLock::class" "$API_CLIENT"; then
+            # masukkan ClientLock sebelum AuthenticateServerAccess::class, atau setelah ServerSubject::class
+            perl -0777 -pe 's/(ServerSubject::class,\s*\n\s*)(AuthenticateServerAccess::class,)/$1\\\\App\\\\Http\\\\Middleware\\\\ClientLock::class,\n        $2/s' -i "$API_CLIENT" || true
 
-    # Restart queue/process if exists (best-effort)
-    if systemctl list-units --type=service --all | grep -q pteroq; then
+            # jika pola di atas tidak mengganti (karena formatting), coba pola lain:
+            if ! grep -q "ClientLock::class" "$API_CLIENT"; then
+                perl -0777 -pe 's/(ServerSubject::class,\s*\n\s*)(ResourceBelongsToServer::class,)/$1\\\\App\\\\Http\\\\Middleware\\\\ClientLock::class,\n        $2/s' -i "$API_CLIENT" || true
+            fi
+
+            if grep -q "ClientLock::class" "$API_CLIENT"; then
+                echo "  -> ClientLock disisipkan ke $API_CLIENT"
+            else
+                echo "  -> Gagal otomatis sisipkan ClientLock, file akan dibackup saja. Edarkan manual:"
+                echo "     - Edit $API_CLIENT dan pada group prefix '/servers/{server}' tambahkan \\App\\Http\\Middleware\\ClientLock::class di array middleware."
+            fi
+        else
+            echo "  -> ClientLock sudah ada di $API_CLIENT"
+        fi
+    else
+        echo "  -> File $API_CLIENT tidak ditemukan, lewati modifikasi api-client."
+    fi
+
+    echo "[*] Membersihkan cache laravel (jika tersedia)..."
+    if [ -d "$PTERO" ]; then
+        cd "$PTERO" || true
+        php artisan route:clear 2>/dev/null || true
+        php artisan config:clear 2>/dev/null || true
+        php artisan cache:clear 2>/dev/null || true
+    fi
+
+    # restart pteroq jika tersedia (jangan fail jika tidak ada)
+    if command -v systemctl >/dev/null 2>&1; then
         systemctl restart pteroq 2>/dev/null || true
     fi
 
-    echo "========================================="
-    echo " ANTI RUSUH FINAL TERPASANG (OWNER: $OWNER)"
-    echo " Backup di: $BACKUP_DIR"
-    echo " - Middleware dibuat: $ADMIN_MW and $CLIENT_MW"
-    echo " - Kernel dipatch aman (alias + web group)"
-    echo " - API client diperiksa/di-patch jika ada"
-    echo "========================================="
-    echo "Tes akses dengan user non-owner untuk memastikan protection berfungsi."
-    echo "Jika ada error 500, lihat storage/logs/laravel.log"
+    echo "======================================"
+    echo "ANTIRUSUH FINAL TERPASANG (SAFE MODE)"
+    echo "Backup di: $BACKUP_DIR"
+    echo "Jika masih ada route yang perlu disisipkan manual, periksa $API_CLIENT"
+    echo "======================================"
 }
 
 uninstall(){
     banner
-    # find latest backup to restore
-    latest=$(ls -d "$BACKUP_DIR_ROOT"/preinstall_* 2>/dev/null | tail -n1)
-    if [ -z "$latest" ]; then
-        echo "No backup found in $BACKUP_DIR_ROOT. Will try to remove files safe."
-        rm -f "$ADMIN_MW" "$CLIENT_MW"
-        # remove aliases and whitelist insertion (best-effort)
-        sed -i "/whitelistadmin/d" "$KERNEL" 2>/dev/null || true
-        sed -i "/clientlock/d" "$KERNEL" 2>/dev/null || true
-        sed -i "/WhitelistAdmin::class/d" "$KERNEL" 2>/dev/null || true
-        if [ -f "$API_CLIENT" ]; then
-            sed -i "s/,\s*'clientlock'//g" "$API_CLIENT" 2>/dev/null || true
-            sed -i "s/'clientlock',//g" "$API_CLIENT" 2>/dev/null || true
-        fi
-        php artisan route:clear 2>/dev/null || true
-        echo "Uninstall best-effort finished."
-        exit 0
+    echo "[*] Menghapus file middleware (tidak menghapus backup)..."
+    rm -f "$ADMIN_MW" "$CLIENT_MW" || true
+
+    if [ -f "$KERNEL" ]; then
+        sed -i "/whitelistadmin/d" "$KERNEL" || true
+        sed -i "/clientlock/d" "$KERNEL" || true
+        # hapus entry class di web group
+        sed -i "/Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class/d" "$KERNEL" || true
     fi
 
-    echo "Restoring from backup: $latest"
-    cp -a "$latest/Kernel.php" "$KERNEL" 2>/dev/null || true
-    cp -a "$latest/$(basename "$API_CLIENT")" "$API_CLIENT" 2>/dev/null || true
-    cp -a "$latest/$(basename "$ADMIN_MW")" "$ADMIN_MW" 2>/dev/null || true
-    cp -a "$latest/$(basename "$CLIENT_MW")" "$CLIENT_MW" 2>/dev/null || true
-    rm -f "$ADMIN_MW" "$CLIENT_MW"
-    php artisan route:clear 2>/dev/null || true
-    echo "Uninstall complete. Restored Kernel & api-client to backup."
+    if [ -f "$API_CLIENT" ]; then
+        # hapus clientlock dari api-client jika tersisip
+        sed -i "s/, *'\\\\App\\\\Http\\\\Middleware\\\\ClientLock::class'//g" "$API_CLIENT" || true
+        sed -i "s/\\\\App\\\\Http\\\\Middleware\\\\ClientLock::class, //g" "$API_CLIENT" || true
+        sed -i "s/\\\\App\\\\Http\\\\Middleware\\\\ClientLock::class//g" "$API_CLIENT" || true
+    fi
+
+    if [ -d "$PTERO" ]; then
+        cd "$PTERO" || true
+        php artisan route:clear 2>/dev/null || true
+        php artisan config:clear 2>/dev/null || true
+        php artisan cache:clear 2>/dev/null || true
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart pteroq 2>/dev/null || true
+    fi
+
+    echo "======================================"
+    echo "ANTIRUSUH FINAL DIHAPUS (file backup masih ada di $BACKUP_DIR)"
+    echo "Jika panel masih error, restore backup manual dari folder diatas."
+    echo "======================================"
 }
 
-menu(){
-    while true; do
-        banner
-        echo "1) Install Anti-Rusuh FINAL"
-        echo "2) Uninstall (restore latest backup)"
-        echo "3) Exit"
-        read -p "Pilih: " opt
-        case "$opt" in
-            1) install; break ;;
-            2) uninstall; break ;;
-            3) exit 0 ;;
-            *) echo "Pilih 1/2/3";;
+helpmsg(){
+    cat <<'EOF'
+Usage:
+  installer: run and pilih '1' untuk install, '2' untuk uninstall
+Notes:
+  - Script ini membuat backup file yang diubah di $PTERO/antirusuh_backups
+  - Jika ada error 500 setelah install, jalankan uninstall lalu kirimkan log laravel/storage/logs/laravel-*.log
+EOF
+}
+
+# main menu if run interactively
+if [ "${BASH_SOURCE[0]}" == "$0" ]; then
+    echo
+    echo "Anti-Rusuh FINAL installer"
+    PS3="Pilih: "
+    options=("Install" "Uninstall" "Exit")
+    select opt in "${options[@]}"; do
+        case $opt in
+            "Install") install; break ;;
+            "Uninstall") uninstall; break ;;
+            "Exit") exit 0 ;;
+            *) echo "Pilihan tidak valid." ;;
         esac
     done
-}
-
-menu
+fi
