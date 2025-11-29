@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 PT="/var/www/pterodactyl"
 M="$PT/app/Http/Middleware"
 K="$PT/app/Http/Kernel.php"
 R="$PT/routes"
-B="$PT/.antirusuh_backup_$(date +%s)"
 
-backup(){ [ -f "$1" ] && mkdir -p "$(dirname "$B/$1")" && cp -a "$1" "$B/$1"; }
+install(){
+    echo "[INSTALL] Membuat middleware..."
+    mkdir -p "$M"
 
-install_wla(){
-f="$M/WhitelistAdmin.php"
-backup "$f"
-cat > "$f" <<'EOF'
+    cat > "$M/WhitelistAdmin.php" <<'EOF'
 <?php
 namespace App\Http\Middleware;
 use Closure;
@@ -25,13 +22,8 @@ class WhitelistAdmin{
     }
 }
 EOF
-chmod 644 "$f"
-}
 
-install_cl(){
-f="$M/ClientLock.php"
-backup "$f"
-cat > "$f" <<'EOF'
+    cat > "$M/ClientLock.php" <<'EOF'
 <?php
 namespace App\Http\Middleware;
 use Closure;
@@ -40,75 +32,60 @@ class ClientLock{
         $u=$r->user();
         $s=$r->route('server');
         if(!$u) abort(403,'Unauthorized');
-        if($s && $u->id!==$s->owner_id) abort(403,'Access denied');
+        if($s && $u->id !== $s->owner_id) abort(403,'Access denied');
         return $n($r);
     }
 }
 EOF
-chmod 644 "$f"
+
+    echo "[INSTALL] Register kernel..."
+    sed -i "/middlewareAliases = \[/a\        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," "$K"
+    sed -i "/middlewareAliases = \[/a\        'clientlock' => \\\\App\\\\Http\\\\Middleware\\\\ClientLock::class," "$K"
+
+    echo "[INSTALL] Patch routes..."
+    grep -RIl "prefix' => '/servers" "$R" | while read f; do
+        sed -i "s/'middleware' => \[/& 'clientlock',/" "$f"
+    done
+
+    echo "[INSTALL] Clearing cache..."
+    cd "$PT"
+    php artisan route:clear
+    php artisan cache:clear
+    php artisan config:clear
+
+    echo "[DONE] AntiRusuh terpasang!"
 }
 
-kernel_reg(){
-backup "$K"
-grep -q "WhitelistAdmin::class" "$K" || sed -i "s/middlewareAliases = \[/middlewareAliases = \[\n        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class,/g" "$K"
-grep -q "ClientLock::class" "$K"    || sed -i "s/middlewareAliases = \[/middlewareAliases = \[\n        'clientlock' => \\\\App\\\\Http\\\\Middleware\\\\ClientLock::class,/g" "$K"
-}
+uninstall(){
+    echo "[UNINSTALL] Menghapus middleware..."
+    rm -f "$M/WhitelistAdmin.php"
+    rm -f "$M/ClientLock.php"
 
-inject_cl(){
-files=$(grep -RIl "prefix' => '/servers" "$R" || true)
-[ -z "$files" ] && return 0
-for f in $files; do
-    backup "$f"
-    grep -q "clientlock" "$f" && continue
-    sed -i "s/'middleware' => \[/& 'clientlock',/g" "$f" || true
-done
-}
+    echo "[UNINSTALL] Membersihkan kernel..."
+    sed -i "/clientlock/d" "$K"
+    sed -i "/whitelistadmin/d" "$K"
 
-clear_cache(){
-cd "$PT"
-php artisan route:clear || true
-php artisan cache:clear || true
-php artisan config:clear || true
-php artisan view:clear || true
-}
-
-install_all(){
-mkdir -p "$M"
-install_wla
-install_cl
-kernel_reg
-inject_cl
-clear_cache
-echo "$B"
-}
-
-uninstall_all(){
-rm -f "$M/ClientLock.php" "$M/WhitelistAdmin.php"
-backup "$K"
-sed -i "/clientlock/d" "$K"
-sed -i "/whitelistadmin/d" "$K"
-clear_cache
+    echo "[UNINSTALL] Done."
 }
 
 repair(){
-kernel_reg
-inject_cl
-clear_cache
+    echo "[REPAIR] Repair kernel dan route..."
+    install
 }
 
 menu(){
-echo "1) Install"
+echo "1) Install my"
 echo "2) Uninstall"
 echo "3) Repair"
 echo "4) Exit"
-read -r x
-case "$x" in
-1) install_all ;;
-2) uninstall_all ;;
+read -p "Choice: " c
+
+case $c in
+1) install ;;
+2) uninstall ;;
 3) repair ;;
-*) exit 0 ;;
+*) exit ;;
 esac
 }
 
-[ "$(id -u)" != "0" ] && echo "run as root" && exit 1
 menu
