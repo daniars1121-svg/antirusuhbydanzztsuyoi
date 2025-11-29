@@ -2,14 +2,14 @@
 set -e
 
 PTERO="/var/www/pterodactyl"
+
 PROVIDER="$PTERO/app/Providers/AntiRusuhProvider.php"
-BOOT="$PTERO/bootstrap/cache/packages.php"
-BACKUP="$BOOT.bak"
+MIDDLEWARE="$PTERO/app/Http/Middleware/AntiRusuhMiddleware.php"
 
 banner() {
     echo "======================================="
-    echo "     ANTI RUSUH FINAL v3 — WORKING"
-    echo "     Protect /admin/* tanpa edit core"
+    echo "   ANTI RUSUH FINAL v4 — SAFE & WORKING"
+    echo "   Tanpa edit admin.php / kernel / packages"
     echo "======================================="
 }
 
@@ -17,64 +17,41 @@ install() {
     banner
     read -p "Masukkan ID Owner Utama: " OWNER
 
-    cp "$BOOT" "$BACKUP"
-
-    cat > "$PROVIDER" <<EOF
-<?php
-
-namespace App\Providers;
-
-use Illuminate\Support\ServiceProvider;
-use Illuminate\Support\Facades\Route;
-
-class AntiRusuhProvider extends ServiceProvider
-{
-    public function boot()
-    {
-        \$owner = $OWNER;
-
-        // Proteksi ADMIN PANEL
-        Route::middlewareGroup('antirusuh_admin', [
-            function (\$req, \$next) use (\$owner) {
-
-                \$u = \$req->user();
-                if (!\$u) return abort(403,"ngapain wok");
-
-                \$path = \$req->path();
-
-                if (str_starts_with(\$path, 'admin') && \$u->id != \$owner && empty(\$u->root_admin)) {
-                    return abort(403,"ngapain wok");
-                }
-
-                return \$next(\$req);
-            }
-        ]);
-
-        // Tambahkan middleware ke semua route admin tanpa edit admin.php
-        app('router')->pushMiddlewareToGroup('web', \App\Http\Middleware\CheckAdminAccess::class);
-    }
-}
-EOF
-
-    # middleware kecil untuk routing admin
-    mkdir -p "$PTERO/app/Http/Middleware"
-cat > "$PTERO/app/Http/Middleware/CheckAdminAccess.php" <<EOF
+    # Buat middleware anti-rusuh
+cat > "$MIDDLEWARE" <<EOF
 <?php
 
 namespace App\Http\Middleware;
 
 use Closure;
 
-class CheckAdminAccess {
+class AntiRusuhMiddleware {
+
     public function handle(\$req, Closure \$next) {
 
-        \$u = \$req->user();
-        if (!\$u) return \$next(\$req);
+        \$user = \$req->user();
+        if (!\$user) return abort(403, 'ngapain wok');
 
-        \$path = \$req->path();
+        \$path = trim(\$req->path(), '/');
 
-        if (str_starts_with(\$path,'admin') && \$u->id != ${OWNER} && empty(\$u->root_admin)) {
-            abort(403, "ngapain wok");
+        // Proteksi admin panel
+        if (str_starts_with(\$path, 'admin') && 
+            \$user->id != $OWNER && 
+            empty(\$user->root_admin)) {
+
+            return abort(403, 'ngapain wok');
+        }
+
+        // Proteksi akses server API
+        if (\$req->route()?->parameter('server')) {
+            \$srv = \$req->route()->parameter('server');
+
+            if (\$srv->owner_id != \$user->id &&
+                empty(\$user->root_admin) &&
+                \$user->id != $OWNER) {
+
+                return abort(403, 'ngapain wok');
+            }
         }
 
         return \$next(\$req);
@@ -82,15 +59,37 @@ class CheckAdminAccess {
 }
 EOF
 
-    echo "App\\Providers\\AntiRusuhProvider" >> "$BOOT"
+    # Provider yang auto-register middleware via router
+cat > "$PROVIDER" <<EOF
+<?php
 
+namespace App\Providers;
+
+use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Facades\Route;
+use App\Http\Middleware\AntiRusuhMiddleware;
+
+class AntiRusuhProvider extends ServiceProvider {
+
+    public function boot() {
+
+        // Masukkan middleware ke group "web"
+        app('router')->pushMiddlewareToGroup('web', AntiRusuhMiddleware::class);
+
+        // Masukkan middleware ke group "client-api"
+        app('router')->pushMiddlewareToGroup('client-api', AntiRusuhMiddleware::class);
+    }
+}
+EOF
+
+    echo "→ Membersihkan cache"
     cd "$PTERO"
     php artisan optimize:clear
 
     echo ""
     echo "======================================="
-    echo "  AntiRusuh FINAL v3 TERPASANG!"
-    echo "  • /admin/* hanya untuk owner"
+    echo "  AntiRusuh FINAL v4 TERPASANG!"
+    echo "  Semua proteksi aktif."
     echo "======================================="
 }
 
@@ -98,19 +97,16 @@ uninstall() {
     banner
 
     rm -f "$PROVIDER"
-    rm -f "$PTERO/app/Http/Middleware/CheckAdminAccess.php"
-
-    if [ -f "$BACKUP" ]; then
-        mv "$BACKUP" "$BOOT"
-    fi
+    rm -f "$MIDDLEWARE"
 
     cd "$PTERO"
     php artisan optimize:clear
 
     echo "======================================="
-    echo "  AntiRusuh berhasil DIHAPUS"
+    echo " AntiRusuh FINAL v4 DIHAPUS!"
     echo "======================================="
 }
+
 
 menu() {
     banner
