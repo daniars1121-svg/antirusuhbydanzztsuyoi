@@ -1,123 +1,107 @@
 #!/bin/bash
-set -e
 
-PTERO="/var/www/pterodactyl"
-MW="$PTERO/app/Http/Middleware/AntiRusuh.php"
-PROVIDER="$PTERO/app/Providers/AntiRusuhProvider.php"
-CONFIG="$PTERO/config/antirusuh.php"
+PANEL_PATH="/var/www/pterodactyl"
+MW_PATH="$PANEL_PATH/app/Http/Middleware/AntiRusuh.php"
+PROVIDER_PATH="$PANEL_PATH/app/Providers/AntiRusuhProvider.php"
+CONFIG_APP="$PANEL_PATH/config/app.php"
 
-banner(){
-    echo "==============================="
-    echo "  ANTI RUSUH FINAL V8 (STABLE)"
-    echo "==============================="
-}
+echo "==============================="
+echo " ANTI RUSUH FINAL V9 (AMANKAN)"
+echo "==============================="
+echo "1) Install"
+echo "2) Uninstall"
+read -p "Pilih: " P
 
-install(){
-    banner
+if [[ "$P" == "1" ]]; then
     read -p "Masukkan ID Owner Utama: " OWNER
-    mkdir -p "$PTERO/config"
 
-cat > "$CONFIG" <<EOF
+    echo "→ Membuat AntiRusuh Middleware..."
+    cat > "$MW_PATH" <<EOF
 <?php
-return [
-    "owner" => $OWNER,
-    "blocked" => [
-        "admin/nodes",
-        "admin/servers",
-        "admin/databases",
-        "admin/users",
-        "admin/locations",
-        "admin/mounts",
-        "admin/nests",
-    ],
-];
-EOF
 
-cat > "$MW" <<EOF
-<?php
 namespace Pterodactyl\Http\Middleware;
 
 use Closure;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class AntiRusuh
 {
-    public function handle(\$req, Closure \$next)
+    public function handle(Request \$request, Closure \$next)
     {
-        \$cfg = config("antirusuh");
-        \$owner = \$cfg["owner"];
-        \$blocked = \$cfg["blocked"];
+        \$owner = env('ANTIRUSUH_OWNER', 1);
+        \$user = Auth::user();
 
-        \$u = \$req->user();
-        if (!\$u) return \$next(\$req);
+        if (!\$user) return abort(403, 'Forbidden');
 
-        \$path = ltrim(\$req->path(), "/");
-
-        foreach (\$blocked as \$b){
-            if (strpos(\$path, \$b) === 0){
-                if (\$u->id != \$owner && !\$u->root_admin){
-                    abort(403, "Tidak diizinkan.");
-                }
+        // Boleh akses admin hanya pemilik
+        if (\$request->is('admin/*') || \$request->is('api/application/*')) {
+            if (\$user->id != \$owner) {
+                return abort(403, 'Akses ditolak: Kamu bukan owner.');
             }
         }
 
-        if (\$req->route()?->parameter("server")){
-            \$s = \$req->route()->parameter("server");
-            if (\$s->owner_id != \$u->id && !\$u->root_admin && \$u->id != \$owner){
-                abort(403, "Tidak diizinkan.");
-            }
-        }
-
-        return \$next(\$req);
+        return \$next(\$request);
     }
 }
 EOF
 
-cat > "$PROVIDER" <<EOF
+    echo "→ Membuat Provider..."
+    cat > "$PROVIDER_PATH" <<EOF
 <?php
-namespace App\Providers;
+
+namespace Pterodactyl\Providers;
 
 use Illuminate\Support\ServiceProvider;
-use Pterodactyl\Http\Middleware\AntiRusuh;
+use Illuminate\Support\Facades\Route;
 
 class AntiRusuhProvider extends ServiceProvider
 {
     public function boot()
     {
-        if (file_exists(config_path("antirusuh.php"))){
-            app("router")->pushMiddlewareToGroup("web", AntiRusuh::class);
-        }
+        Route::middlewareGroup('web', array_merge(
+            Route::getMiddlewareGroups()['web'],
+            [\Pterodactyl\Http\Middleware\AntiRusuh::class]
+        ));
     }
 }
 EOF
 
-echo "App\\Providers\\AntiRusuhProvider" >> "$PTERO/config/app.php"
+    echo "→ Register provider..."
+    if ! grep -q "AntiRusuhProvider" "$CONFIG_APP"; then
+        sed -i "/App\\\Providers\\\RouteServiceProvider::class,/a \ \ \ \ Pterodactyl\\\Providers\\\AntiRusuhProvider::class," "$CONFIG_APP"
+    fi
 
-cd "$PTERO"
-composer dump-autoload -o
-php artisan optimize:clear
-systemctl restart pteroq
+    echo "→ Menambah ENV..."
+    if ! grep -q "ANTIRUSUH_OWNER" "$PANEL_PATH/.env"; then
+        echo "ANTIRUSUH_OWNER=$OWNER" >> "$PANEL_PATH/.env"
+    else
+        sed -i "s/ANTIRUSUH_OWNER=.*/ANTIRUSUH_OWNER=$OWNER/" "$PANEL_PATH/.env"
+    fi
 
-echo "==============================="
-echo "  Anti Rusuh Final V8 Terpasang"
-echo "==============================="
-}
-
-uninstall(){
-    rm -f "$MW" "$PROVIDER" "$CONFIG"
-    sed -i "/AntiRusuhProvider/d" "$PTERO/config/app.php"
-
-    cd "$PTERO"
-    composer dump-autoload -o
+    echo "→ Membersihkan cache..."
+    cd $PANEL_PATH
     php artisan optimize:clear
-    systemctl restart pteroq
 
-    echo "Anti Rusuh Final V8 dihapus."
-}
+    echo "==============================="
+    echo "   ANTI RUSUH AKTIF V9 ✔"
+    echo "   Hanya ID = $OWNER yg bisa buka admin"
+    echo "==============================="
 
-banner
-echo "1) Instal"
-echo "2) Uninstall"
-read -p "Pilih: " x
+elif [[ "$P" == "2" ]]; then
+    echo "→ Menghapus Anti Rusuh..."
+    rm -f "$MW_PATH"
+    rm -f "$PROVIDER_PATH"
 
-[ "$x" = "1" ] && install
-[ "$x" = "2" ] && uninstall
+    sed -i "/AntiRusuhProvider/d" "$CONFIG_APP"
+    sed -i "/ANTIRUSUH_OWNER/d" "$PANEL_PATH/.env"
+
+    cd $PANEL_PATH
+    php artisan optimize:clear
+
+    echo "==============================="
+    echo "   ANTI RUSUH DIHAPUS ✔"
+    echo "==============================="
+else
+    echo "Pilihan salah!"
+fi
