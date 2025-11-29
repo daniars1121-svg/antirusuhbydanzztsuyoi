@@ -1,157 +1,114 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PT_PATH="${PT_PATH:-/var/www/pterodactyl}"
-BACKUP_DIR="${PT_PATH}/.antirusuh_backups_$(date +%s)"
-KERNEL="${PT_PATH}/app/Http/Kernel.php"
-ROUTES_DIR="${PT_PATH}/routes"
-MD_DIR="${PT_PATH}/app/Http/Middleware"
+PT="/var/www/pterodactyl"
+M="$PT/app/Http/Middleware"
+K="$PT/app/Http/Kernel.php"
+R="$PT/routes"
+B="$PT/.antirusuh_backup_$(date +%s)"
 
-backup_file(){ [ -f "$1" ] && mkdir -p "$(dirname "$BACKUP_DIR/$1")" && cp -a "$1" "$BACKUP_DIR/$1"; }
+backup(){ [ -f "$1" ] && mkdir -p "$(dirname "$B/$1")" && cp -a "$1" "$B/$1"; }
 
-ensure(){
-    [ -d "$PT_PATH" ] || { echo "PT_PATH not found: $PT_PATH"; exit 1; }
-    mkdir -p "$BACKUP_DIR"
-    mkdir -p "$MD_DIR"
-}
-
-create_whitelist(){
-    f="$MD_DIR/WhitelistAdmin.php"
-    backup_file "$f"
-    cat > "$f" <<'PHP'
+install_wla(){
+f="$M/WhitelistAdmin.php"
+backup "$f"
+cat > "$f" <<'EOF'
 <?php
-namespace Pterodactyl\Http\Middleware;
+namespace App\Http\Middleware;
 use Closure;
-use Illuminate\Http\Request;
 class WhitelistAdmin{
-    public function handle(Request $request, Closure $next){
-        $user = $request->user();
-        if(!$user) abort(403,'Access denied.');
-        if(!empty($user->root_admin) && $user->root_admin) return $next($request);
+    public function handle($r, Closure $n){
+        $u=$r->user();
+        if(!$u) abort(403,'Access denied');
+        if(!empty($u->root_admin)&&$u->root_admin) return $n($r);
         abort(403,'Ngapain njir');
     }
 }
-PHP
-    chmod 0644 "$f"
+EOF
+chmod 644 "$f"
 }
 
-create_clientlock(){
-    f="$MD_DIR/ClientLock.php"
-    backup_file "$f"
-    cat > "$f" <<'PHP'
+install_cl(){
+f="$M/ClientLock.php"
+backup "$f"
+cat > "$f" <<'EOF'
 <?php
-namespace Pterodactyl\Http\Middleware;
+namespace App\Http\Middleware;
 use Closure;
-use Illuminate\Http\Request;
 class ClientLock{
-    public function handle(Request $request, Closure $next){
-        $user = $request->user();
-        $server = $request->route('server');
-        if(!$user) abort(403,'Unauthorized.');
-        if($server && isset($server->owner_id) && $user->id !== $server->owner_id) abort(403,'Access denied.');
-        return $next($request);
+    public function handle($r, Closure $n){
+        $u=$r->user();
+        $s=$r->route('server');
+        if(!$u) abort(403,'Unauthorized');
+        if($s && $u->id!==$s->owner_id) abort(403,'Access denied');
+        return $n($r);
     }
 }
-PHP
-    chmod 0644 "$f"
+EOF
+chmod 644 "$f"
 }
 
-register_kernel(){
-    [ -f "$KERNEL" ] || { echo "Kernel not found: $KERNEL"; return 1; }
-    backup_file "$KERNEL"
-    if ! grep -q "WhitelistAdmin::class" "$KERNEL"; then
-        sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," "$KERNEL"
-    fi
-    if ! grep -q "ClientLock::class" "$KERNEL"; then
-        sed -i "/protected \$middlewareAliases = \[/a\        'clientlock' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\ClientLock::class," "$KERNEL"
-    fi
+kernel_reg(){
+backup "$K"
+grep -q "WhitelistAdmin::class" "$K" || sed -i "s/middlewareAliases = \[/middlewareAliases = \[\n        'whitelistadmin' => \\\\App\\\\Http\\\\Middleware\\\\WhitelistAdmin::class,/g" "$K"
+grep -q "ClientLock::class" "$K"    || sed -i "s/middlewareAliases = \[/middlewareAliases = \[\n        'clientlock' => \\\\App\\\\Http\\\\Middleware\\\\ClientLock::class,/g" "$K"
 }
 
-inject_clientlock(){
-    files=$(grep -RIl "prefix' => '\/servers" "$ROUTES_DIR" || true)
-    if [ -z "$files" ]; then
-        echo "No routes file with prefix '/servers' found; skipping route injection."
-        return 0
-    fi
-    for f in $files; do
-        backup_file "$f"
-        if grep -q "'clientlock'" "$f"; then
-            echo "clientlock already present in $f"
-            continue
-        fi
-        if grep -q "'middleware' => *\[" "$f"; then
-            lineno=$(grep -n "'middleware' => *\[" "$f" | head -n1 | cut -d: -f1)
-            if [ -n "$lineno" ]; then
-                sed -i "${lineno}a\\        'clientlock'," "$f"
-                echo "Inserted clientlock into existing middleware array in $f"
-            fi
-        else
-            lineno=$(grep -n "prefix' => '\/servers" "$f" | head -n1 | cut -d: -f1 || true)
-            if [ -n "$lineno" ]; then
-                sed -n "1,${lineno}p" "$f" > "$f.tmp"
-                printf "    'middleware' => [\n        'clientlock',\n    ],\n" >> "$f.tmp"
-                sed -n "$((lineno+1)),\$p" "$f" >> "$f.tmp"
-                mv "$f.tmp" "$f"
-                echo "Inserted clientlock middleware block into $f"
-            else
-                echo "No prefix line matched in $f; skipped"
-            fi
-        fi
-        perl -0777 -pe "s/('clientlock'\s*,\s*){2,}/'clientlock',/s" -i "$f" || true
-    done
+inject_cl(){
+files=$(grep -RIl "prefix' => '/servers" "$R" || true)
+[ -z "$files" ] && return 0
+for f in $files; do
+    backup "$f"
+    grep -q "clientlock" "$f" && continue
+    sed -i "s/'middleware' => \[/& 'clientlock',/g" "$f" || true
+done
 }
 
 clear_cache(){
-    if [ -d "$PT_PATH" ] && command -v php >/dev/null 2>&1; then
-        cd "$PT_PATH"
-        php artisan route:clear || true
-        php artisan cache:clear || true
-        php artisan config:clear || true
-        php artisan view:clear || true
-    fi
-}
-
-repair_perm(){
-    if id -u www-data >/dev/null 2>&1; then
-        chown -R www-data:www-data "$PT_PATH" || true
-    fi
+cd "$PT"
+php artisan route:clear || true
+php artisan cache:clear || true
+php artisan config:clear || true
+php artisan view:clear || true
 }
 
 install_all(){
-    ensure
-    create_whitelist
-    create_clientlock
-    register_kernel
-    inject_clientlock
-    clear_cache
-    repair_perm
-    echo "$BACKUP_DIR"
+mkdir -p "$M"
+install_wla
+install_cl
+kernel_reg
+inject_cl
+clear_cache
+echo "$B"
 }
 
 uninstall_all(){
-    rm -f "$MD_DIR/ClientLock.php" "$MD_DIR/WhitelistAdmin.php" || true
-    if [ -f "$KERNEL" ]; then
-        backup_file "$KERNEL"
-        sed -i "/clientlock/d" "$KERNEL" || true
-        sed -i "/whitelistadmin/d" "$KERNEL" || true
-    fi
-    clear_cache
+rm -f "$M/ClientLock.php" "$M/WhitelistAdmin.php"
+backup "$K"
+sed -i "/clientlock/d" "$K"
+sed -i "/whitelistadmin/d" "$K"
+clear_cache
+}
+
+repair(){
+kernel_reg
+inject_cl
+clear_cache
 }
 
 menu(){
-    echo "1) Install d"
-    echo "2) Uninstall"
-    echo "3) Repair"
-    echo "4) Exit"
-    read -r c
-    case "$c" in
-        1) install_all ;;
-        2) uninstall_all ;;
-        3) register_kernel; inject_clientlock; clear_cache ;;
-        *) exit 0 ;;
-    esac
+echo "1) Install"
+echo "2) Uninstall"
+echo "3) Repair"
+echo "4) Exit"
+read -r x
+case "$x" in
+1) install_all ;;
+2) uninstall_all ;;
+3) repair ;;
+*) exit 0 ;;
+esac
 }
 
-[ "$(id -u)" -ne 0 ] && echo "run as root" && exit 1
-ensure
+[ "$(id -u)" != "0" ] && echo "run as root" && exit 1
 menu
