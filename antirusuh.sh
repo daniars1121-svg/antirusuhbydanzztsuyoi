@@ -60,27 +60,10 @@ register_kernel(){
     [ -f "$KERNEL" ] || { echo "Kernel not found: $KERNEL"; return 1; }
     backup_file "$KERNEL"
     if ! grep -q "WhitelistAdmin::class" "$KERNEL"; then
-        sed -n "1,240p" "$KERNEL" > "$KERNEL.tmp" && \
-        awk '{
-            print $0
-            if(!x && $0 ~ /protected[[:space:]]+\$middlewareAliases[[:space:]]*=/){
-                x=1; getline; print $0
-                print "        '\''whitelistadmin'\'' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class,"
-                next
-            }
-        }' "$KERNEL.tmp" > "$KERNEL" && rm -f "$KERNEL.tmp" || true
+        sed -i "/protected \$middlewareAliases = \[/a\        'whitelistadmin' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\WhitelistAdmin::class," "$KERNEL"
     fi
     if ! grep -q "ClientLock::class" "$KERNEL"; then
-        backup_file "$KERNEL"
-        sed -n "1,240p" "$KERNEL" > "$KERNEL.tmp" && \
-        awk '{
-            print $0
-            if(!y && $0 ~ /protected[[:space:]]+\$middlewareAliases[[:space:]]*=/){
-                y=1; getline; print $0
-                print "        '\''clientlock'\'' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\ClientLock::class,"
-                next
-            }
-        }' "$KERNEL.tmp" > "$KERNEL" && rm -f "$KERNEL.tmp" || true
+        sed -i "/protected \$middlewareAliases = \[/a\        'clientlock' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\ClientLock::class," "$KERNEL"
     fi
 }
 
@@ -99,36 +82,39 @@ inject_clientlock(){
         if grep -q "'middleware' => *\[" "$f"; then
             lineno=$(grep -n "'middleware' => *\[" "$f" | head -n1 | cut -d: -f1)
             if [ -n "$lineno" ]; then
-                awk -v L="$lineno" 'NR==L{print; print "        '\''clientlock'','; next} {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+                sed -i "${lineno}a\\        'clientlock'," "$f"
+                echo "Inserted clientlock into existing middleware array in $f"
             fi
         else
-            awk '{
-                print
-                if(!x && $0 ~ /'\''prefix'\''\s*=>\s*'\''\/servers/){
-                    print "    '\''middleware'\'' => ["
-                    print "        '\''clientlock'','"
-                    print "    ],"
-                    x=1
-                }
-            }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            lineno=$(grep -n "prefix' => '\/servers" "$f" | head -n1 | cut -d: -f1 || true)
+            if [ -n "$lineno" ]; then
+                sed -n "1,${lineno}p" "$f" > "$f.tmp"
+                printf "    'middleware' => [\n        'clientlock',\n    ],\n" >> "$f.tmp"
+                sed -n "$((lineno+1)),\$p" "$f" >> "$f.tmp"
+                mv "$f.tmp" "$f"
+                echo "Inserted clientlock middleware block into $f"
+            else
+                echo "No prefix line matched in $f; skipped"
+            fi
         fi
-        perl -0777 -pe "s/('clientlock',\s*){2,}/'clientlock',/s" -i "$f" || true
-        echo "Patched $f"
+        perl -0777 -pe "s/('clientlock'\s*,\s*){2,}/'clientlock',/s" -i "$f" || true
     done
 }
 
 clear_cache(){
-    cd "$PT_PATH"
-    command -v php >/dev/null 2>&1 && {
+    if [ -d "$PT_PATH" ] && command -v php >/dev/null 2>&1; then
+        cd "$PT_PATH"
         php artisan route:clear || true
         php artisan cache:clear || true
         php artisan config:clear || true
         php artisan view:clear || true
-    }
+    fi
 }
 
 repair_perm(){
-    id -u www-data >/dev/null 2>&1 && chown -R www-data:www-data "$PT_PATH" || true
+    if id -u www-data >/dev/null 2>&1; then
+        chown -R www-data:www-data "$PT_PATH" || true
+    fi
 }
 
 install_all(){
@@ -144,10 +130,8 @@ install_all(){
 
 uninstall_all(){
     rm -f "$MD_DIR/ClientLock.php" "$MD_DIR/WhitelistAdmin.php" || true
-    if [ -f "$BACKUP_DIR" ]; then
-        echo "No backups to restore"
-    fi
     if [ -f "$KERNEL" ]; then
+        backup_file "$KERNEL"
         sed -i "/clientlock/d" "$KERNEL" || true
         sed -i "/whitelistadmin/d" "$KERNEL" || true
     fi
@@ -155,7 +139,7 @@ uninstall_all(){
 }
 
 menu(){
-    echo "1) Install"
+    echo "1) Install d"
     echo "2) Uninstall"
     echo "3) Repair"
     echo "4) Exit"
