@@ -1,25 +1,26 @@
 #!/bin/bash
-# Skrip instalasi AntiRusuh untuk Pterodactyl Panel
 set -e
 
-# Fungsi install middleware dan konfigurasi
-install() {
-    echo "Menginstall AntiRusuh middleware..."
+OWNER_FILE="/var/www/pterodactyl/.env"
+MW_PATH="/var/www/pterodactyl/app/Http/Middleware/AntiRusuh.php"
+KERNEL="/var/www/pterodactyl/app/Http/Kernel.php"
+ROUTE="/var/www/pterodactyl/routes/admin.php"
 
-    # 1. Tambahkan ANTIRUSUH_OWNER ke .env jika belum ada
-    if ! grep -q "^ANTIRUSUH_OWNER=" .env; then
-        echo "ANTIRUSUH_OWNER=1" >> .env
-        echo "Menambahkan ANTIRUSUH_OWNER=1 ke .env"
+install_antirusuh() {
+    echo "=== INSTALL ANTI RUSUH ==="
+
+    read -p "Masukkan ID Owner Utama: " OWNER
+
+    # Tambahkan ENV
+    if grep -q "ANTIRUSUH_OWNER" $OWNER_FILE; then
+        sed -i "s/ANTIRUSUH_OWNER=.*/ANTIRUSUH_OWNER=$OWNER/" $OWNER_FILE
     else
-        echo "Variabel ANTIRUSUH_OWNER sudah ada di .env, lewati penambahan."
+        echo "ANTIRUSUH_OWNER=$OWNER" >> $OWNER_FILE
     fi
+    echo "[OK] Menambah ENV"
 
-    # 2. Buat file Middleware AntiRusuh di app/Http/Middleware
-    local mw_path="app/Http/Middleware/AntiRusuh.php"
-    if [ -f "$mw_path" ]; then
-        echo "Middleware AntiRusuh sudah ada, lewati pembuatan file."
-    else
-        cat > "$mw_path" << 'EOF'
+    # Buat Middleware
+    cat > $MW_PATH << 'EOF'
 <?php
 
 namespace Pterodactyl\Http\Middleware;
@@ -30,106 +31,79 @@ use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 
 class AntiRusuh
 {
-    /**
-     * Handle an incoming request.
-     *
-     * Hanya memperbolehkan user dengan ID sesuai ANTIRUSUH_OWNER di .env untuk akses.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @param  \Closure  $next
-     * @return mixed
-     *
-     * @throws \Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException
-     */
     public function handle(Request $request, Closure $next)
     {
-        $ownerId = env('ANTIRUSUH_OWNER');
+        $owner = env('ANTIRUSUH_OWNER', 1);
         $user = $request->user();
-        if (!$user || (string)$user->id !== (string)$ownerId) {
-            // Jika bukan user pemilik, tolak akses dengan 403
-            throw new AccessDeniedHttpException('Akses terbatas untuk user tertentu.');
+
+        if (!$user || $user->id != $owner) {
+            throw new AccessDeniedHttpException("Access Denied.");
         }
+
         return $next($request);
     }
 }
 EOF
-        echo "Middleware AntiRusuh dibuat di $mw_path"
+    echo "[OK] Middleware dibuat"
+
+    # Registrasi middleware ke Kernel
+    if ! grep -q "AntiRusuh" $KERNEL; then
+        sed -i "/VerifyReCaptcha::class,/a \        'antirusuh' => \\Pterodactyl\\Http\\Middleware\\AntiRusuh::class," $KERNEL
+        echo "[OK] Middleware didaftarkan ke Kernel"
     fi
 
-    # 3. Daftarkan alias middleware di Kernel (app/Http/Kernel.php)
-    local kernel="app/Http/Kernel.php"
-    if grep -q "AntiRusuh::class" "$kernel"; then
-        echo "Alias AntiRusuh sudah terdaftar di Kernel, lewati penambahan."
-    else
-        # Tambahkan pernyataan use di Kernel
-        sed -i "/use Pterodactyl\\\\Http\\\\Middleware\\\\VerifyReCaptcha/a use Pterodactyl\\\\Http\\\\Middleware\\\\AntiRusuh;" "$kernel"
-        # Tambahkan alias routeMiddleware
-        sed -i "/'recaptcha' => VerifyReCaptcha::class,/a \            'antirusuh' => \\Pterodactyl\\Http\\Middleware\\AntiRusuh::class," "$kernel"
-        echo "Alias 'antirusuh' ditambahkan ke Kernel."
+    # Patch routes admin
+    if ! grep -q "antirusuh" $ROUTE; then
+        sed -i "1s/^/Route::middleware(['antirusuh'])->group(function () {\n/" $ROUTE
+        echo "});" >> $ROUTE
+        echo "[OK] Proteksi admin ditambahkan"
     fi
 
-    # 4. Modifikasi routes/admin.php untuk melindungi route admin
-    local routes="routes/admin.php"
-    # Cek apakah sudah memiliki group antirusuh
-    if grep -q "middleware' => \['antirusuh'\]" "$routes"; then
-        echo "Route admin sudah menggunakan middleware antirusuh, lewati modifikasi."
-    else
-        # Masukkan route group dengan middleware sebelum rute admin pertama
-        sed -i "/^Route::get.*admin.index/ i Route::group(['middleware' => ['antirusuh']], function () {" "$routes"
-        # Tutup kurung setelah rute admin terakhir
-        sed -i "/->where('react'/a });" "$routes"
-        echo "Route admin dibungkus dengan Route::group middleware antirusuh."
-    fi
+    cd /var/www/pterodactyl
+    php artisan cache:clear
+    php artisan route:clear
 
-    echo "Instalasi AntiRusuh selesai."
+    echo "=== ANTI RUSUH AKTIF ==="
+    echo "Hanya ID $OWNER yg bisa buka /admin"
 }
 
-# Fungsi uninstall: hapus perubahan dan file
-uninstall() {
-    echo "Menghapus AntiRusuh middleware..."
+uninstall_antirusuh() {
+    echo "=== UNINSTALL ANTI RUSUH ==="
 
-    # 1. Hapus variabel ANTIRUSUH_OWNER di .env
-    if grep -q "^ANTIRUSUH_OWNER=" .env; then
-        sed -i "/^ANTIRUSUH_OWNER=/d" .env
-        echo "Variabel ANTIRUSUH_OWNER dihapus dari .env"
-    else
-        echo "Variabel ANTIRUSUH_OWNER tidak ditemukan di .env"
-    fi
+    # Hapus ENV
+    sed -i "/ANTIRUSUH_OWNER/d" $OWNER_FILE
+    echo "[OK] ENV dibersihkan"
 
-    # 2. Hapus file Middleware AntiRusuh
-    local mw_path="app/Http/Middleware/AntiRusuh.php"
-    if [ -f "$mw_path" ]; then
-        rm "$mw_path"
-        echo "File $mw_path dihapus."
-    else
-        echo "File $mw_path tidak ditemukan, lewati penghapusan."
-    fi
+    # Hapus middleware
+    rm -f $MW_PATH
+    echo "[OK] Middleware dihapus"
 
-    # 3. Hapus alias di Kernel
-    local kernel="app/Http/Kernel.php"
-    sed -i "/use Pterodactyl\\\\Http\\\\Middleware\\\\AntiRusuh;/d" "$kernel"
-    sed -i "/'antirusuh' => \\\\Pterodactyl\\\\Http\\\\Middleware\\\\AntiRusuh::class,/d" "$kernel"
-    echo "Alias 'antirusuh' di Kernel dihapus."
+    # Hapus dari Kernel
+    sed -i "/antirusuh/d" $KERNEL
+    echo "[OK] Kernel dibersihkan"
 
-    # 4. Kembalikan routes/admin.php seperti semula
-    local routes="routes/admin.php"
-    sed -i "/Route::group\|\['middleware' \=> \['antirusuh'\]\]/d" "$routes"
-    sed -i "/^});/d" "$routes"
-    echo "Modifikasi routes/admin.php dikembalikan."
+    # Kembalikan route admin
+    sed -i "/Route::middleware(\['antirusuh'\])->group(function () {/,/});/d" $ROUTE
+    echo "[OK] Proteksi admin dihapus"
 
-    echo "Uninstall AntiRusuh selesai."
+    cd /var/www/pterodactyl
+    php artisan cache:clear
+    php artisan route:clear
+
+    echo "=== ANTI RUSUH DIHAPUS & PANEL NORMAL ==="
 }
 
-# Eksekusi fungsi sesuai argumen
-case "$1" in
-    install)
-        install
-        ;;
-    uninstall)
-        uninstall
-        ;;
-    *)
-        echo "Gunakan: $0 {install|uninstall}"
-        exit 1
-        ;;
-esac
+echo "==============================="
+echo "     ANTI RUSUH FINAL V13"
+echo "==============================="
+echo "1) Install"
+echo "2) Uninstall"
+read -p "Pilih: " PIL
+
+if [ "$PIL" == "1" ]; then
+    install_antirusuh
+elif [ "$PIL" == "2" ]; then
+    uninstall_antirusuh
+else
+    echo "Pilihan tidak valid."
+fi
