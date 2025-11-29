@@ -2,89 +2,114 @@
 set -e
 
 PTERO="/var/www/pterodactyl"
-FILE="$PTERO/app/Http/Controllers/Admin/BaseController.php"
-BACKUP="$FILE.antirusuh_backup"
+PROVIDER="$PTERO/app/Providers/AntiRusuhProvider.php"
+BOOT="$PTERO/bootstrap/cache/packages.php"
+BACKUP="$BOOT.bak"
 
 banner() {
-    echo "========================================="
-    echo "     ANTI RUSUH FINAL — AUTOINJECT v2"
-    echo "========================================="
+    echo "======================================="
+    echo "     ANTI RUSUH FINAL v3 — WORKING"
+    echo "     Protect /admin/* tanpa edit core"
+    echo "======================================="
 }
 
-install_antirusuh() {
+install() {
+    banner
     read -p "Masukkan ID Owner Utama: " OWNER
 
-    if [ ! -f "$BACKUP" ]; then
-        cp "$FILE" "$BACKUP"
-        echo "[INFO] Backup dibuat: $BACKUP"
-    fi
+    cp "$BOOT" "$BACKUP"
 
-    if grep -q "ngapain wok" "$FILE"; then
-        echo "[INFO] AntiRusuh sudah terpasang!"
-        exit 0
-    fi
+    cat > "$PROVIDER" <<EOF
+<?php
 
-    echo "[INFO] Menyuntik AntiRusuh..."
+namespace App\Providers;
 
-    awk -v owner="$OWNER" '
-        /__construct/ && !found {
-            print $0
-            in_ctor=1
-            next
+use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Facades\Route;
+
+class AntiRusuhProvider extends ServiceProvider
+{
+    public function boot()
+    {
+        \$owner = $OWNER;
+
+        // Proteksi ADMIN PANEL
+        Route::middlewareGroup('antirusuh_admin', [
+            function (\$req, \$next) use (\$owner) {
+
+                \$u = \$req->user();
+                if (!\$u) return abort(403,"ngapain wok");
+
+                \$path = \$req->path();
+
+                if (str_starts_with(\$path, 'admin') && \$u->id != \$owner && empty(\$u->root_admin)) {
+                    return abort(403,"ngapain wok");
+                }
+
+                return \$next(\$req);
+            }
+        ]);
+
+        // Tambahkan middleware ke semua route admin tanpa edit admin.php
+        app('router')->pushMiddlewareToGroup('web', \App\Http\Middleware\CheckAdminAccess::class);
+    }
+}
+EOF
+
+    # middleware kecil untuk routing admin
+    mkdir -p "$PTERO/app/Http/Middleware"
+cat > "$PTERO/app/Http/Middleware/CheckAdminAccess.php" <<EOF
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+
+class CheckAdminAccess {
+    public function handle(\$req, Closure \$next) {
+
+        \$u = \$req->user();
+        if (!\$u) return \$next(\$req);
+
+        \$path = \$req->path();
+
+        if (str_starts_with(\$path,'admin') && \$u->id != ${OWNER} && empty(\$u->root_admin)) {
+            abort(403, "ngapain wok");
         }
-        in_ctor && /\{/ {
-            print "{"
-            print "        /* Anti Rusuh Injected */"
-            print "        $allowed_owner = " owner ";"
-            print "        $u = auth()->user();"
-            print "        $path = request()->path();"
-            print ""
-            print "        if ($u && $u->id != $allowed_owner && empty($u->root_admin)) {"
-            print "            $blocked = ["
-            print "                \"admin/nodes\","
-            print "                \"admin/servers\","
-            print "                \"admin/databases\","
-            print "                \"admin/locations\","
-            print "                \"admin/mounts\","
-            print "                \"admin/nests\","
-            print "                \"admin/users\""
-            print "            ];"
-            print ""
-            print "            foreach ($blocked as $b) {"
-            print "                if (str_starts_with($path, $b)) {"
-            print "                    abort(403, \"ngapain wok\");"
-            print "                }"
-            print "            }"
-            print "        }"
-            in_ctor=0
-            found=1
-            next
-        }
-        { print }
-    ' "$FILE" > "$FILE.tmp"
 
-    mv "$FILE.tmp" "$FILE"
+        return \$next(\$req);
+    }
+}
+EOF
+
+    echo "App\\Providers\\AntiRusuhProvider" >> "$BOOT"
 
     cd "$PTERO"
     php artisan optimize:clear
 
-    echo "========================================="
-    echo "  AntiRusuh FINAL berhasil dipasang!"
-    echo "========================================="
+    echo ""
+    echo "======================================="
+    echo "  AntiRusuh FINAL v3 TERPASANG!"
+    echo "  • /admin/* hanya untuk owner"
+    echo "======================================="
 }
 
-uninstall_antirusuh() {
-    if [ ! -f "$BACKUP" ]; then
-        echo "[ERROR] Tidak ada backup untuk restore."
-        exit 1
+uninstall() {
+    banner
+
+    rm -f "$PROVIDER"
+    rm -f "$PTERO/app/Http/Middleware/CheckAdminAccess.php"
+
+    if [ -f "$BACKUP" ]; then
+        mv "$BACKUP" "$BOOT"
     fi
 
-    cp "$BACKUP" "$FILE"
-    php $PTERO/artisan optimize:clear
+    cd "$PTERO"
+    php artisan optimize:clear
 
-    echo "========================================="
-    echo "  AntiRusuh FINAL berhasil dihapus!"
-    echo "========================================="
+    echo "======================================="
+    echo "  AntiRusuh berhasil DIHAPUS"
+    echo "======================================="
 }
 
 menu() {
@@ -94,11 +119,10 @@ menu() {
     echo "3) Exit"
     read -p "Pilih: " x
 
-    case "$x" in
-        1) install_antirusuh ;;
-        2) uninstall_antirusuh ;;
-        3) exit 0 ;;
-        *) echo "Pilihan salah!" ;;
+    case $x in
+        1) install ;;
+        2) uninstall ;;
+        3) exit ;;
     esac
 }
 
