@@ -2,115 +2,70 @@
 set -e
 
 PTERO="/var/www/pterodactyl"
+CTRL="$PTERO/app/Http/Controllers/Admin/BaseController.php"
 
 banner(){
-    echo "======================================"
-    echo "        ANTI RUSUH FINAL – ACTIVE"
-    echo "    (Tanpa edit admin.php / kernel)"
-    echo "======================================"
+    echo "==============================="
+    echo "    ANTI RUSUH FINAL 100% AKTIF"
+    echo "==============================="
 }
 
 install(){
     banner
     read -p "Masukkan ID Owner Utama: " OWNER
 
-    mkdir -p "$PTERO/routes"
+    cp "$CTRL" "$CTRL.bak"
 
-    cat > "$PTERO/routes/antirusuh.php" <<EOF
-<?php
-
-use Illuminate\Support\Facades\Route;
-
-Route::middleware([])->group(function () {
-
-    \$owner = $OWNER;
-
-    // Proteksi semua halaman admin panel
-    Route::any('/admin/{any?}', function () use (\$owner) {
-
-        \$u = request()->user();
-        if (!\$u) abort(403, "ngapain wok");
-
-        \$path = request()->path();
-
-        \$block = [
-            "admin/nodes",
-            "admin/servers",
-            "admin/databases",
-            "admin/locations",
-            "admin/mounts",
-            "admin/nests",
-        ];
-
-        foreach (\$block as \$p){
-            if (strpos(\$path, \$p) === 0 && \$u->id != \$owner && empty(\$u->root_admin)) {
-                abort(403, "ngapain wok");
-            }
-        }
-    })->where('any', '.*');
-
-    // Lindungi panel server user
-    Route::matched(function (\$event) use (\$owner) {
-
-        \$req = \$event->request;
-        \$u = \$req->user();
-        if (!\$u) return;
-
-        \$srv = \$req->route()->parameter('server');
-
-        if (\$srv) {
-            if (\$srv->owner_id != \$u->id && empty(\$u->root_admin) && \$u->id != \$owner) {
-                abort(403, "ngapain wok");
-            }
-        }
-    });
-
-});
-EOF
-
-    # DAFTARKAN ROUTE BARU KE RouteServiceProvider
-    if ! grep -q "antirusuh.php" "$PTERO/app/Providers/RouteServiceProvider.php"; then
-        sed -i "/public function map()/a \        require __DIR__.'/../../routes/antirusuh.php';" "$PTERO/app/Providers/RouteServiceProvider.php"
-    fi
+    # Tambahkan proteksi di constructor BaseController
+    sed -i '/public function __construct()/a \
+        \\t$u = auth()->user(); \
+        \\tif($u && $u->id != '"$OWNER"' && !$u->root_admin){ \
+        \\t\t$path = request()->path(); \
+        \\t\t$block = ["admin/nodes","admin/servers","admin/databases","admin/locations","admin/mounts","admin/nests"]; \
+        \\t\tforeach($block as $p){ \
+        \\t\t\tif(strpos($path,$p)===0){ abort(403,"ngapain wok"); } \
+        \\t\t} \
+        \\t} \
+    ' "$CTRL"
 
     cd $PTERO
-    php artisan route:clear
-    php artisan cache:clear
     php artisan optimize:clear
 
     echo ""
-    echo "======================================"
-    echo "   Anti Rusuh FINAL Terpasang!"
-    echo "   Proteksi Admin & Server Aktif"
-    echo "======================================"
+    echo "==============================="
+    echo "  ANTI RUSUH FINAL DIPASANG!"
+    echo "==============================="
 }
 
 uninstall(){
     banner
-
-    rm -f "$PTERO/routes/antirusuh.php"
-
-    sed -i "/antirusuh/d" "$PTERO/app/Providers/RouteServiceProvider.php"
+    if [ -f "$CTRL.bak" ]; then
+        mv "$CTRL.bak" "$CTRL"
+        echo "[OK] BaseController dikembalikan"
+    else
+        echo "[!] Backup tidak ditemukan"
+    fi
 
     cd $PTERO
-    php artisan route:clear
-    php artisan cache:clear
+    php artisan optimize:clear
 
-    echo ""
-    echo "======================================"
-    echo "   Anti Rusuh FINAL DIHAPUS!"
-    echo "======================================"
+    echo "==============================="
+    echo "     ANTI RUSUH FINAL DIHAPUS"
+    echo "==============================="
 }
 
 menu(){
     banner
     echo "1) Install"
     echo "2) Uninstall"
-    echo "3) Exit g"
+    echo "3) Exit"
     read -p "Pilih: " x
 
-    [ "$x" = 1 ] && install
-    [ "$x" = 2 ] && uninstall
+    case "$x" in
+        1) install ;;
+        2) uninstall ;;
+        *) exit ;;
+    esac
 }
 
 menu
