@@ -2,69 +2,103 @@
 set -e
 
 PTERO="/var/www/pterodactyl"
-CTRL="$PTERO/app/Http/Controllers/Admin/BaseController.php"
+FILE="$PTERO/app/Http/Controllers/Admin/BaseController.php"
+BACKUP="$FILE.antirusuh_backup"
 
 banner(){
-    echo "==============================="
-    echo "    ANTI RUSUH FINAL 100% AKTIF"
-    echo "==============================="
+    echo "========================================="
+    echo "     ANTI RUSUH FINAL — AUTOINJECT"
+    echo "========================================="
 }
 
-install(){
-    banner
+inject_code(){
     read -p "Masukkan ID Owner Utama: " OWNER
 
-    cp "$CTRL" "$CTRL.bak"
+    if [ ! -f "$BACKUP" ]; then
+        cp "$FILE" "$BACKUP"
+        echo "[INFO] Backup dibuat: $BACKUP"
+    fi
 
-    # Tambahkan proteksi di constructor BaseController
-    sed -i '/public function __construct()/a \
-        \\t$u = auth()->user(); \
-        \\tif($u && $u->id != '"$OWNER"' && !$u->root_admin){ \
-        \\t\t$path = request()->path(); \
-        \\t\t$block = ["admin/nodes","admin/servers","admin/databases","admin/locations","admin/mounts","admin/nests"]; \
-        \\t\tforeach($block as $p){ \
-        \\t\t\tif(strpos($path,$p)===0){ abort(403,"ngapain wok"); } \
-        \\t\t} \
-        \\t} \
-    ' "$CTRL"
+    # Cek apakah sudah terpasang
+    if grep -q "ngapain wok" "$FILE"; then
+        echo "[INFO] AntiRusuh sudah terpasang."
+        exit
+    fi
 
-    cd $PTERO
+    echo "[INFO] Menyuntik AntiRusuh ke BaseController..."
+
+    # Tambah kode sesudah '{' pertama dalam constructor
+    awk -v owner="$OWNER" '
+        /__construct/ && found==0 {
+            print;
+            in_constructor=1;
+            next
+        }
+        in_constructor==1 && /\{/ {
+            print "{";
+            print "        $allowed_owner = " owner ";";
+            print "        $u = auth()->user();";
+            print "        $path = request()->path();";
+            print "";
+            print "        if ($u && $u->id != $allowed_owner && !$u->root_admin) {";
+            print "            $blocked = ['";
+            print "                'admin/nodes',";
+            print "                'admin/servers',";
+            print "                'admin/databases',";
+            print "                'admin/locations',";
+            print "                'admin/mounts',";
+            print "                'admin/nests',";
+            print "                'admin/users',";
+            print "            ];";
+            print "";
+            print "            foreach ($blocked as $b) {";
+            print "                if (str_starts_with($path, $b)) {";
+            print "                    abort(403, \"ngapain wok\");";
+            print "                }";
+            print "            }";
+            print "        }";
+            in_constructor=0;
+            found=1;
+            next
+        }
+        { print }
+    ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+
+    cd "$PTERO"
     php artisan optimize:clear
 
-    echo ""
-    echo "==============================="
-    echo "  ANTI RUSUH FINAL DIPASANG!"
-    echo "==============================="
+    echo "========================================="
+    echo "  AntiRusuh FINAL TELAH TERPASANG!"
+    echo "========================================="
 }
 
 uninstall(){
-    banner
-    if [ -f "$CTRL.bak" ]; then
-        mv "$CTRL.bak" "$CTRL"
-        echo "[OK] BaseController dikembalikan"
-    else
-        echo "[!] Backup tidak ditemukan"
+    if [ ! -f "$BACKUP" ]; then
+        echo "[ERROR] Tidak ada backup! Tidak bisa uninstall."
+        exit
     fi
 
-    cd $PTERO
+    cp "$BACKUP" "$FILE"
+    cd "$PTERO"
     php artisan optimize:clear
 
-    echo "==============================="
-    echo "     ANTI RUSUH FINAL DIHAPUS"
-    echo "==============================="
+    echo "========================================="
+    echo "  AntiRusuh FINAL TELAH DIHAPUS!"
+    echo "========================================="
 }
 
 menu(){
     banner
     echo "1) Install"
     echo "2) Uninstall"
-    echo "3) Exit"
+    echo "3) Exit k"
     read -p "Pilih: " x
 
-    case "$x" in
-        1) install ;;
+    case $x in
+        1) inject_code ;;
         2) uninstall ;;
-        *) exit ;;
+        3) exit ;;
+        *) echo "Pilihan tidak valid" ;;
     esac
 }
 
