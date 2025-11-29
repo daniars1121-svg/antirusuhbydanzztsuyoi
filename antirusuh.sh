@@ -5,8 +5,8 @@ PTERO="/var/www/pterodactyl"
 
 banner() {
     echo "====================================="
-    echo "   ANTI RUSUH FINAL — FULL WORK"
-    echo "   Protect /admin tanpa rusak panel"
+    echo "  ANTI RUSUH FINAL — FULL WORK"
+    echo "  Compatible semua versi Pterodactyl"
     echo "====================================="
 }
 
@@ -44,7 +44,7 @@ class AntiRusuh
 }
 EOF
 
-    echo "[INFO] Membuat wrapper admin-wrapper.php..."
+    echo "[INFO] Membuat admin-wrapper.php..."
 cat > $PTERO/routes/admin-wrapper.php <<EOF
 <?php
 
@@ -56,33 +56,36 @@ Route::middleware([AntiRusuh::class])->group(function () {
 });
 EOF
 
-    echo "[INFO] Mengganti loader admin di web.php..."
-    sed -i 's/require __DIR__ . .admin.php./require __DIR__ . "\/admin-wrapper.php";/g' \
-        $PTERO/routes/web.php
+    echo "[INFO] Mengganti loader admin di base.php..."
+
+    sed -i \
+        's/require __DIR__ . .admin.php./require __DIR__ . "\/admin-wrapper.php";/g' \
+        $PTERO/routes/base.php || true
 
     cd $PTERO
     php artisan optimize:clear
 
     echo "====================================="
-    echo " AntiRusuh berhasil DIPASANG!"
+    echo "  AntiRusuh Berhasil DIPASANG!"
     echo "====================================="
 }
 
 uninstall() {
     banner
-    echo "[INFO] Menghapus AntiRusuh..."
 
+    echo "[INFO] Menghapus AntiRusuh..."
     rm -f $PTERO/app/Http/Middleware/AntiRusuh.php
     rm -f $PTERO/routes/admin-wrapper.php
 
-    sed -i 's/admin-wrapper.php/admin.php/g' \
-        $PTERO/routes/web.php
+    sed -i \
+        's/admin-wrapper.php/admin.php/g' \
+        $PTERO/routes/base.php || true
 
     cd $PTERO
     php artisan optimize:clear
 
     echo "====================================="
-    echo " AntiRusuh berhasil DIHAPUS!"
+    echo "  AntiRusuh berhasil DIHAPUS!"
     echo "====================================="
 }
 
