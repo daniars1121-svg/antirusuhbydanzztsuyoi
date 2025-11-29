@@ -1,12 +1,12 @@
 #!/bin/bash
 
-PANEL_PATH="/var/www/pterodactyl"
-MW_PATH="$PANEL_PATH/app/Http/Middleware/AntiRusuh.php"
-PROVIDER_PATH="$PANEL_PATH/app/Providers/AntiRusuhProvider.php"
-CONFIG_APP="$PANEL_PATH/config/app.php"
+PANEL="/var/www/pterodactyl"
+MW="$PANEL/app/Http/Middleware/AntiRusuh.php"
+KERNEL="$PANEL/app/Http/Kernel.php"
+ENV="$PANEL/.env"
 
 echo "==============================="
-echo " ANTI RUSUH FINAL V9 (AMANKAN)"
+echo " ANTI RUSUH V10 (FULL WORK)"
 echo "==============================="
 echo "1) Install"
 echo "2) Uninstall"
@@ -15,8 +15,8 @@ read -p "Pilih: " P
 if [[ "$P" == "1" ]]; then
     read -p "Masukkan ID Owner Utama: " OWNER
 
-    echo "→ Membuat AntiRusuh Middleware..."
-    cat > "$MW_PATH" <<EOF
+    echo "→ Membuat middleware..."
+    cat > "$MW" <<EOF
 <?php
 
 namespace Pterodactyl\Http\Middleware;
@@ -32,12 +32,11 @@ class AntiRusuh
         \$owner = env('ANTIRUSUH_OWNER', 1);
         \$user = Auth::user();
 
-        if (!\$user) return abort(403, 'Forbidden');
+        if (!\$user) return abort(403);
 
-        // Boleh akses admin hanya pemilik
         if (\$request->is('admin/*') || \$request->is('api/application/*')) {
             if (\$user->id != \$owner) {
-                return abort(403, 'Akses ditolak: Kamu bukan owner.');
+                return abort(403, 'Akses ditolak (AntiRusuh V10)');
             }
         }
 
@@ -46,62 +45,42 @@ class AntiRusuh
 }
 EOF
 
-    echo "→ Membuat Provider..."
-    cat > "$PROVIDER_PATH" <<EOF
-<?php
+    echo "→ Menambahkan ENV..."
+    sed -i "/ANTIRUSUH_OWNER/d" "$ENV"
+    echo "ANTIRUSUH_OWNER=$OWNER" >> "$ENV"
 
-namespace Pterodactyl\Providers;
-
-use Illuminate\Support\ServiceProvider;
-use Illuminate\Support\Facades\Route;
-
-class AntiRusuhProvider extends ServiceProvider
-{
-    public function boot()
-    {
-        Route::middlewareGroup('web', array_merge(
-            Route::getMiddlewareGroups()['web'],
-            [\Pterodactyl\Http\Middleware\AntiRusuh::class]
-        ));
-    }
-}
-EOF
-
-    echo "→ Register provider..."
-    if ! grep -q "AntiRusuhProvider" "$CONFIG_APP"; then
-        sed -i "/App\\\Providers\\\RouteServiceProvider::class,/a \ \ \ \ Pterodactyl\\\Providers\\\AntiRusuhProvider::class," "$CONFIG_APP"
+    echo "→ Inject kernel..."
+    if ! grep -q "AntiRusuh" "$KERNEL"; then
+        sed -i "/protected \$middlewareAliases = \[/a \ \ \ \ 'antirusuh' => Pterodactyl\\\Http\\\Middleware\\\AntiRusuh::class," "$KERNEL"
     fi
 
-    echo "→ Menambah ENV..."
-    if ! grep -q "ANTIRUSUH_OWNER" "$PANEL_PATH/.env"; then
-        echo "ANTIRUSUH_OWNER=$OWNER" >> "$PANEL_PATH/.env"
-    else
-        sed -i "s/ANTIRUSUH_OWNER=.*/ANTIRUSUH_OWNER=$OWNER/" "$PANEL_PATH/.env"
-    fi
+    echo "→ Tambah ke group web..."
+    sed -i "/web' => \[/a \ \ \ \ \ \ \ \ 'antirusuh'," "$KERNEL"
 
-    echo "→ Membersihkan cache..."
-    cd $PANEL_PATH
+    echo "→ Clear cache..."
+    cd $PANEL
     php artisan optimize:clear
 
     echo "==============================="
-    echo "   ANTI RUSUH AKTIF V9 ✔"
-    echo "   Hanya ID = $OWNER yg bisa buka admin"
+    echo " ANTI RUSUH V10 AKTIF ✔"
+    echo " Hanya ID $OWNER yang bisa buka admin"
     echo "==============================="
+fi
 
-elif [[ "$P" == "2" ]]; then
-    echo "→ Menghapus Anti Rusuh..."
-    rm -f "$MW_PATH"
-    rm -f "$PROVIDER_PATH"
+if [[ "$P" == "2" ]]; then
+    echo "→ Menghapus file middleware..."
+    rm -f "$MW"
 
-    sed -i "/AntiRusuhProvider/d" "$CONFIG_APP"
-    sed -i "/ANTIRUSUH_OWNER/d" "$PANEL_PATH/.env"
+    echo "→ Menghapus dari kernel..."
+    sed -i "/antirusuh/d" "$KERNEL"
 
-    cd $PANEL_PATH
+    echo "→ Membersihkan ENV..."
+    sed -i "/ANTIRUSUH_OWNER/d" "$ENV"
+
+    cd $PANEL
     php artisan optimize:clear
 
     echo "==============================="
-    echo "   ANTI RUSUH DIHAPUS ✔"
+    echo " ANTI RUSUH V10 DIHAPUS ✔"
     echo "==============================="
-else
-    echo "Pilihan salah!"
 fi
