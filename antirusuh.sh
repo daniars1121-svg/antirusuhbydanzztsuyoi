@@ -2,23 +2,23 @@
 set -e
 
 PTERO="/var/www/pterodactyl"
+MW="$PTERO/app/Http/Middleware/AntiRusuh.php"
+WRAPPER="$PTERO/routes/admin-protected.php"
+WEB="$PTERO/routes/web.php"
 
-banner() {
-    echo "====================================="
-    echo "      ANTI RUSUH ULTRA FINAL"
-    echo " Protect admin & server API (Stable)"
-    echo "====================================="
+banner(){
+echo "========================================"
+echo "      ANTI RUSUH FINAL – CLEAN MODE"
+echo "  Tidak edit core • Tidak rusak panel"
+echo "========================================"
 }
 
 install(){
     banner
-    read -p "Masukkan ID Owner Utama: " OWNER
+    read -p "Masukkan ID Owner: " OWNER
 
     echo "[INFO] Membuat middleware AntiRusuh..."
-
-    mkdir -p "$PTERO/app/Http/Middleware"
-
-cat > "$PTERO/app/Http/Middleware/AntiRusuh.php" <<EOF
+    cat > "$MW" <<EOF
 <?php
 
 namespace Pterodactyl\Http\Middleware;
@@ -27,81 +27,95 @@ use Closure;
 
 class AntiRusuh
 {
-    public function handle(\$request, Closure \$next)
+    public function handle(\$req, Closure \$next)
     {
-        \$u = \$request->user();
-        if (!\$u) return \$next(\$request);
+        \$u = \$req->user();
+        if (!\$u) return \$next(\$req);
 
         \$owner = $OWNER;
-        \$path = ltrim(\$request->path(), '/');
+        \$path = ltrim(\$req->path(), '/');
 
-        /* Proteksi halaman admin */
-        if (str_starts_with(\$path, 'admin')) {
-            if (\$u->id != \$owner && !\$u->root_admin) {
-                return abort(403, "ngapain wok");
+        \$blocked = [
+            'admin/nodes',
+            'admin/servers',
+            'admin/databases',
+            'admin/locations',
+            'admin/mounts',
+            'admin/nests',
+            'admin/users',
+        ];
+
+        foreach (\$blocked as \$b){
+            if (str_starts_with(\$path,\$b) && \$u->id != \$owner && !\$u->root_admin){
+                abort(403, "ngapain wok");
             }
         }
 
-        /* Proteksi API server */
-        if (\$request->route()?->parameter('server')) {
-            \$server = \$request->route()->parameter('server');
-            if (\$server->owner_id != \$u->id && !\$u->root_admin && \$u->id != \$owner) {
-                return abort(403, "ngapain wok");
+        if (\$req->route()?->parameter('server')){
+            \$srv = \$req->route()->parameter('server');
+            if (\$srv->owner_id != \$u->id && !\$u->root_admin && \$u->id != \$owner){
+                abort(403, "ngapain wok");
             }
         }
 
-        return \$next(\$request);
+        return \$next(\$req);
     }
 }
 EOF
 
-    echo "[INFO] Menyuntik middleware ke Kernel..."
+    echo "[INFO] Membuat wrapper admin-protected.php..."
+    cat > "$WRAPPER" <<EOF
+<?php
+use Pterodactyl\Http\Middleware\AntiRusuh;
 
-    sed -i "/protected \$middlewareAliases/a\        'antirusuh' => \\Pterodactyl\\\\Http\\\\Middleware\\\\AntiRusuh::class," \
-        "$PTERO/app/Http/Kernel.php"
+Route::middleware([AntiRusuh::class])->group(function () {
+    require base_path('routes/admin.php');
+});
+EOF
 
-    echo "[INFO] Mengaktifkan AntiRusuh di group 'web' & 'api'..."
+    echo "[INFO] Mengaktifkan wrapper di web.php..."
+    if ! grep -q "admin-protected.php" "$WEB"; then
+        sed -i "s|require __DIR__.'/admin.php';|require __DIR__.'/admin-protected.php';|" "$WEB"
+    fi
 
-    sed -i "/'web' => \[/a\            'antirusuh'," "$PTERO/app/Http/Kernel.php"
-    sed -i "/'api' => \[/a\            'antirusuh'," "$PTERO/app/Http/Kernel.php"
-
-    echo "[INFO] Membersihkan cache Laravel..."
-    cd "$PTERO"
+    echo "[INFO] Membersihkan cache..."
+    cd $PTERO
     php artisan optimize:clear
 
-    echo ""
-    echo "====================================="
-    echo " ANTI RUSUH ULTRA FINAL TERPASANG!"
-    echo "====================================="
+    echo "========================================"
+    echo "AntiRusuh FINAL berhasil DIPASANG!"
+    echo "========================================"
 }
 
 uninstall(){
     banner
+    echo "[INFO] Menghapus middleware..."
+    rm -f "$MW"
+    rm -f "$WRAPPER"
 
-    echo "[INFO] Menghapus file middleware..."
-    rm -f "$PTERO/app/Http/Middleware/AntiRusuh.php"
+    echo "[INFO] Mengembalikan web.php..."
+    sed -i "s|admin-protected.php|admin.php|" "$WEB"
 
-    echo "[INFO] Membersihkan Kernel..."
-    sed -i "/antirusuh/d" "$PTERO/app/Http/Kernel.php"
-
-    echo "[INFO] Membersihkan cache..."
-    cd "$PTERO"
+    cd $PTERO
     php artisan optimize:clear
 
-    echo ""
-    echo "====================================="
-    echo " ANTI RUSUH ULTRA FINAL DIHAPUS!"
-    echo "====================================="
+    echo "========================================"
+    echo "AntiRusuh FINAL berhasil DIHAPUS!"
+    echo "========================================"
 }
 
 menu(){
     banner
-    echo "1) Install"
-    echo "2) Uninstall"
+    echo "1) Install AntiRusuh"
+    echo "2) Uninstall AntiRusuh"
     echo "3) Exit"
     read -p "Pilih: " x
-    [ "$x" = "1" ] && install
-    [ "$x" = "2" ] && uninstall
+
+    case $x in
+        1) install ;;
+        2) uninstall ;;
+        3) exit ;;
+    esac
 }
 
 menu
