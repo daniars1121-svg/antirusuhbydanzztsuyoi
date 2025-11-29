@@ -5,13 +5,13 @@ PTERO="/var/www/pterodactyl"
 FILE="$PTERO/app/Http/Controllers/Admin/BaseController.php"
 BACKUP="$FILE.antirusuh_backup"
 
-banner(){
+banner() {
     echo "========================================="
-    echo "     ANTI RUSUH FINAL — AUTOINJECT"
+    echo "     ANTI RUSUH FINAL — AUTOINJECT v2"
     echo "========================================="
 }
 
-inject_code(){
+install_antirusuh() {
     read -p "Masukkan ID Owner Utama: " OWNER
 
     if [ ! -f "$BACKUP" ]; then
@@ -19,86 +19,86 @@ inject_code(){
         echo "[INFO] Backup dibuat: $BACKUP"
     fi
 
-    # Cek apakah sudah terpasang
     if grep -q "ngapain wok" "$FILE"; then
-        echo "[INFO] AntiRusuh sudah terpasang."
-        exit
+        echo "[INFO] AntiRusuh sudah terpasang!"
+        exit 0
     fi
 
-    echo "[INFO] Menyuntik AntiRusuh ke BaseController..."
+    echo "[INFO] Menyuntik AntiRusuh..."
 
-    # Tambah kode sesudah '{' pertama dalam constructor
     awk -v owner="$OWNER" '
-        /__construct/ && found==0 {
-            print;
-            in_constructor=1;
+        /__construct/ && !found {
+            print $0
+            in_ctor=1
             next
         }
-        in_constructor==1 && /\{/ {
-            print "{";
-            print "        $allowed_owner = " owner ";";
-            print "        $u = auth()->user();";
-            print "        $path = request()->path();";
-            print "";
-            print "        if ($u && $u->id != $allowed_owner && !$u->root_admin) {";
-            print "            $blocked = ['";
-            print "                'admin/nodes',";
-            print "                'admin/servers',";
-            print "                'admin/databases',";
-            print "                'admin/locations',";
-            print "                'admin/mounts',";
-            print "                'admin/nests',";
-            print "                'admin/users',";
-            print "            ];";
-            print "";
-            print "            foreach ($blocked as $b) {";
-            print "                if (str_starts_with($path, $b)) {";
-            print "                    abort(403, \"ngapain wok\");";
-            print "                }";
-            print "            }";
-            print "        }";
-            in_constructor=0;
-            found=1;
+        in_ctor && /\{/ {
+            print "{"
+            print "        /* Anti Rusuh Injected */"
+            print "        $allowed_owner = " owner ";"
+            print "        $u = auth()->user();"
+            print "        $path = request()->path();"
+            print ""
+            print "        if ($u && $u->id != $allowed_owner && empty($u->root_admin)) {"
+            print "            $blocked = ["
+            print "                \"admin/nodes\","
+            print "                \"admin/servers\","
+            print "                \"admin/databases\","
+            print "                \"admin/locations\","
+            print "                \"admin/mounts\","
+            print "                \"admin/nests\","
+            print "                \"admin/users\""
+            print "            ];"
+            print ""
+            print "            foreach ($blocked as $b) {"
+            print "                if (str_starts_with($path, $b)) {"
+            print "                    abort(403, \"ngapain wok\");"
+            print "                }"
+            print "            }"
+            print "        }"
+            in_ctor=0
+            found=1
             next
         }
         { print }
-    ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+    ' "$FILE" > "$FILE.tmp"
+
+    mv "$FILE.tmp" "$FILE"
 
     cd "$PTERO"
     php artisan optimize:clear
 
     echo "========================================="
-    echo "  AntiRusuh FINAL TELAH TERPASANG!"
+    echo "  AntiRusuh FINAL berhasil dipasang!"
     echo "========================================="
 }
 
-uninstall(){
+uninstall_antirusuh() {
     if [ ! -f "$BACKUP" ]; then
-        echo "[ERROR] Tidak ada backup! Tidak bisa uninstall."
-        exit
+        echo "[ERROR] Tidak ada backup untuk restore."
+        exit 1
     fi
 
     cp "$BACKUP" "$FILE"
-    cd "$PTERO"
-    php artisan optimize:clear
+    php $PTERO/artisan optimize:clear
 
     echo "========================================="
-    echo "  AntiRusuh FINAL TELAH DIHAPUS!"
+    echo "  AntiRusuh FINAL berhasil dihapus!"
     echo "========================================="
 }
 
-menu(){
+menu() {
     banner
     echo "1) Install"
     echo "2) Uninstall"
-    echo "3) Exit k"
+    echo "3) Exit"
     read -p "Pilih: " x
 
-    case $x in
-        1) inject_code ;;
-        2) uninstall ;;
-        3) exit ;;
-        *) echo "Pilihan tidak valid" ;;
+    case "$x" in
+        1) install_antirusuh ;;
+        2) uninstall_antirusuh ;;
+        3) exit 0 ;;
+        *) echo "Pilihan salah!" ;;
     esac
 }
 
