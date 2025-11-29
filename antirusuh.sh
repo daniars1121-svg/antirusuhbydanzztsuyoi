@@ -3,22 +3,23 @@ set -e
 
 PTERO="/var/www/pterodactyl"
 MW="$PTERO/app/Http/Middleware/AntiRusuh.php"
-WRAPPER="$PTERO/routes/admin-protected.php"
-WEB="$PTERO/routes/web.php"
+WRAP="$PTERO/routes/admin-protect.php"
+ADMIN="$PTERO/routes/admin.php"
 
 banner(){
-echo "========================================"
-echo "      ANTI RUSUH FINAL – CLEAN MODE"
-echo "  Tidak edit core • Tidak rusak panel"
-echo "========================================"
+echo "=========================================="
+echo "     ANTI RUSUH FINAL UNIVERSAL"
+echo "  Support Pterodactyl 1.10 – 1.11.11"
+echo "  Tanpa edit core • Tanpa 500 error"
+echo "=========================================="
 }
 
 install(){
     banner
     read -p "Masukkan ID Owner: " OWNER
 
-    echo "[INFO] Membuat middleware AntiRusuh..."
-    cat > "$MW" <<EOF
+    echo "[INFO] Membuat AntiRusuh.php..."
+cat > "$MW" <<EOF
 <?php
 
 namespace Pterodactyl\Http\Middleware;
@@ -35,25 +36,27 @@ class AntiRusuh
         \$owner = $OWNER;
         \$path = ltrim(\$req->path(), '/');
 
-        \$blocked = [
+        \$block = [
             'admin/nodes',
             'admin/servers',
-            'admin/databases',
             'admin/locations',
+            'admin/databases',
             'admin/mounts',
             'admin/nests',
             'admin/users',
         ];
 
-        foreach (\$blocked as \$b){
-            if (str_starts_with(\$path,\$b) && \$u->id != \$owner && !\$u->root_admin){
-                abort(403, "ngapain wok");
+        foreach (\$block as \$b) {
+            if (str_starts_with(\$path, \$b)) {
+                if (\$u->id != \$owner && !\$u->root_admin) {
+                    abort(403, "ngapain wok");
+                }
             }
         }
 
-        if (\$req->route()?->parameter('server')){
+        if (\$req->route()?->parameter('server')) {
             \$srv = \$req->route()->parameter('server');
-            if (\$srv->owner_id != \$u->id && !\$u->root_admin && \$u->id != \$owner){
+            if (\$srv->owner_id != \$u->id && !\$u->root_admin && \$u->id != \$owner) {
                 abort(403, "ngapain wok");
             }
         }
@@ -63,45 +66,47 @@ class AntiRusuh
 }
 EOF
 
-    echo "[INFO] Membuat wrapper admin-protected.php..."
-    cat > "$WRAPPER" <<EOF
+    echo "[INFO] Membuat admin-protect.php..."
+cat > "$WRAP" <<EOF
 <?php
+
 use Pterodactyl\Http\Middleware\AntiRusuh;
+use Illuminate\Support\Facades\Route;
 
 Route::middleware([AntiRusuh::class])->group(function () {
     require base_path('routes/admin.php');
 });
 EOF
 
-    echo "[INFO] Mengaktifkan wrapper di web.php..."
-    if ! grep -q "admin-protected.php" "$WEB"; then
-        sed -i "s|require __DIR__.'/admin.php';|require __DIR__.'/admin-protected.php';|" "$WEB"
-    fi
+    echo "[INFO] Mengganti loader admin.php..."
 
-    echo "[INFO] Membersihkan cache..."
+    sed -i "s#require __DIR__.'/admin.php'#require __DIR__.'/admin-protect.php'#" "$PTERO/routes/base.php"
+
+    echo "[INFO] Clear cache..."
     cd $PTERO
     php artisan optimize:clear
 
-    echo "========================================"
-    echo "AntiRusuh FINAL berhasil DIPASANG!"
-    echo "========================================"
+    echo "=========================================="
+    echo "  ANTI RUSUH FINAL UNIVERSAL DIPASANG!"
+    echo "  Owner ID: $OWNER"
+    echo "=========================================="
 }
 
 uninstall(){
     banner
-    echo "[INFO] Menghapus middleware..."
+    echo "[INFO] Menghapus file middleware..."
     rm -f "$MW"
-    rm -f "$WRAPPER"
+    rm -f "$WRAP"
 
-    echo "[INFO] Mengembalikan web.php..."
-    sed -i "s|admin-protected.php|admin.php|" "$WEB"
+    echo "[INFO] Mengembalikan admin loader..."
+    sed -i "s#admin-protect.php#admin.php#" "$PTERO/routes/base.php"
 
     cd $PTERO
     php artisan optimize:clear
 
-    echo "========================================"
-    echo "AntiRusuh FINAL berhasil DIHAPUS!"
-    echo "========================================"
+    echo "=========================================="
+    echo "  ANTI RUSUH FINAL DIHAPUS!"
+    echo "=========================================="
 }
 
 menu(){
@@ -110,7 +115,6 @@ menu(){
     echo "2) Uninstall AntiRusuh"
     echo "3) Exit"
     read -p "Pilih: " x
-
     case $x in
         1) install ;;
         2) uninstall ;;
