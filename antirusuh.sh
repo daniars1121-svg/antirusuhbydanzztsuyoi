@@ -1,37 +1,37 @@
 #!/bin/bash
 
 PANEL="/var/www/pterodactyl"
+MW="$PANEL/app/Http/Middleware/AntiRusuh.php"
+ADMINROUTE="$PANEL/routes/admin.php"
 
-anti_rusuh_install() {
-    echo "==============================="
-    echo "  ANTI RUSUH FINAL V11 (STABLE)"
-    echo "==============================="
+install_ar() {
+    echo "[+] Installing Anti Rusuh V12 SAFE..."
+
     read -p "Masukkan ID Owner Utama: " OWNER
 
-    echo "[+] Membuat Middleware..."
-    cat > $PANEL/app/Http/Middleware/AntiRusuh.php << 'EOF'
+    echo "[+] Membuat middleware..."
+    cat > $MW << 'EOF'
 <?php
 
 namespace Pterodactyl\Http\Middleware;
 
 use Closure;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class AntiRusuh
 {
-    public function handle(Request $request, Closure $next)
+    public function handle($request, Closure $next)
     {
-        $allowedOwner = env('ANTIRUSUH_OWNER');
+        $owner = env('ANTIRUSUH_OWNER');
 
-        if (!$allowedOwner) {
+        if (!$owner) {
             return $next($request);
         }
 
         $user = Auth::user();
 
-        if (!$user || $user->id != $allowedOwner) {
-            return response()->view('errors.403', [], 403);
+        if (!$user || $user->id != $owner) {
+            return response("Forbidden", 403);
         }
 
         return $next($request);
@@ -39,83 +39,53 @@ class AntiRusuh
 }
 EOF
 
-    echo "[+] Membuat Provider..."
-    cat > $PANEL/app/Providers/AntiRusuhProvider.php << 'EOF'
-<?php
-
-namespace Pterodactyl\Providers;
-
-use Illuminate\Support\ServiceProvider;
-
-class AntiRusuhProvider extends ServiceProvider
-{
-    public function boot()
-    {
-        $router = $this->app['router'];
-        $router->aliasMiddleware('anti_rusuh', \Pterodactyl\Http\Middleware\AntiRusuh::class);
-    }
-}
-EOF
-
-    echo "[+] Menambahkan provider ke config/app.php..."
-    if ! grep -q "AntiRusuhProvider" $PANEL/config/app.php; then
-        sed -i "/'providers' => \[/a \ \ \ \ Pterodactyl\\Providers\\AntiRusuhProvider::class," $PANEL/config/app.php
-    fi
-
-    echo "[+] Menambahkan ANTIRUSUH_OWNER ke .env..."
+    echo "[+] Set env..."
     sed -i '/ANTIRUSUH_OWNER/d' $PANEL/.env
     echo "ANTIRUSUH_OWNER=$OWNER" >> $PANEL/.env
 
-    echo "[+] Patch admin.php route..."
-    ADMIN="$PANEL/routes/admin.php"
-
-    if ! grep -q "anti_rusuh" $ADMIN; then
-        sed -i "1s/^/Route::middleware(['anti_rusuh'])->group(function () {\n/" $ADMIN
-        echo "});" >> $ADMIN
+    echo "[+] Patch admin.php (NO provider)..."
+    if ! grep -q "AntiRusuh" $ADMINROUTE; then
+        sed -i "1s|^|use Pterodactyl\\Http\\Middleware\\AntiRusuh;\nRoute::middleware([AntiRusuh::class])->group(function() {\n|" $ADMINROUTE
+        echo "});" >> $ADMINROUTE
     fi
 
-    echo "[+] Membersihkan cache..."
+    echo "[+] Cache clear..."
     cd $PANEL
-    composer dump-autoload
     php artisan optimize:clear
 
-    echo "==============================="
-    echo "   ANTI RUSUH FINAL V11 AKTIF"
-    echo "   Hanya ID $OWNER bisa buka /admin"
-    echo "==============================="
+    echo "=============================="
+    echo " ANTI RUSUH V12 AKTIF ✔"
+    echo " Hanya ID $OWNER bisa buka /admin"
+    echo "=============================="
 }
 
-anti_rusuh_uninstall() {
-    echo "[+] Menghapus Anti Rusuh FINAL V11..."
+uninstall_ar() {
+    echo "[+] Uninstall Anti Rusuh V12..."
 
-    rm -f $PANEL/app/Http/Middleware/AntiRusuh.php
-    rm -f $PANEL/app/Providers/AntiRusuhProvider.php
-
-    sed -i '/AntiRusuhProvider/d' $PANEL/config/app.php
+    rm -f $MW
     sed -i '/ANTIRUSUH_OWNER/d' $PANEL/.env
 
-    ADMIN="$PANEL/routes/admin.php"
-    sed -i '/anti_rusuh/d' $ADMIN
-    sed -i 's/});$//' $ADMIN
+    sed -i '/AntiRusuh/d' $ADMINROUTE
+    sed -i '/group(function()/d' $ADMINROUTE
+    sed -i '/});$/d' $ADMINROUTE
 
     cd $PANEL
-    composer dump-autoload
     php artisan optimize:clear
 
-    echo "[✓] Anti Rusuh V11 telah dihapus."
+    echo "[✓] Anti Rusuh V12 dihapus & panel aman."
 }
 
-echo "==============================="
-echo "     ANTI RUSUH FINAL V11"
-echo "==============================="
+echo "=============================="
+echo "   ANTI RUSUH FINAL V12 SAFE"
+echo "=============================="
 echo "1) Install"
 echo "2) Uninstall"
-read -p "Pilih: " PIL
+read -p "Pilih: " P
 
-if [[ $PIL == "1" ]]; then
-    anti_rusuh_install
-elif [[ $PIL == "2" ]]; then
-    anti_rusuh_uninstall
+if [ "$P" == "1" ]; then
+    install_ar
+elif [ "$P" == "2" ]; then
+    uninstall_ar
 else
-    echo "Pilihan tidak valid!"
+    echo "Pilihan tidak valid."
 fi
